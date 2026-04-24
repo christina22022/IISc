@@ -102,18 +102,76 @@ def safe_mean_cfu(df, name_col):
     if df is None or df.empty:
         return pd.DataFrame()
     out = df.copy()
+    label_col = find_col(out, [name_col, "source", "source_name", "sourceName", "sample", "Sample", "location", "site_name"])
+    mean_col = find_col(out, ["mean_cfu", "CFU_avg", "CFU avg", "cfu_avg", "cfuavg", "colony_count_10_6", "na_plate_count"])
+    if label_col and mean_col:
+        result = out[[label_col, mean_col]].copy()
+        result.columns = [name_col, "mean_cfu"]
+        result["mean_cfu"] = pd.to_numeric(result["mean_cfu"], errors="coerce")
+        return result.dropna(subset=[name_col, "mean_cfu"])
+
+    rep_cols = [
+        find_col(out, ["rep1", "CFU(Replicate1)", "CFU Replicate1"]),
+        find_col(out, ["rep2", "CFU( Replicate 2)", "CFU(Replicate2)", "CFU Replicate2"]),
+        find_col(out, ["rep3", "CFU(replicate3)", "CFU Replicate3"]),
+    ]
+    if label_col and all(rep_cols):
+        result = out[[label_col] + rep_cols].copy()
+        result.columns = [name_col, "rep1", "rep2", "rep3"]
+        for col in ["rep1", "rep2", "rep3"]:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+        result["mean_cfu"] = result[["rep1", "rep2", "rep3"]].mean(axis=1).round(3)
+        return result.dropna(subset=[name_col, "mean_cfu"])
+
     expected = [name_col, "rep1", "rep2", "rep3"]
-    if all(col in out.columns for col in expected):
-        pass
-    elif len(out.columns) >= 4:
-        out = out.iloc[:, :4].copy()
-        out.columns = expected
-    else:
-        return out
-    for col in ["rep1", "rep2", "rep3"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    out["mean_cfu"] = out[["rep1", "rep2", "rep3"]].mean(axis=1).round(3)
+    if len(out.columns) >= 4:
+        result = out.iloc[:, :4].copy()
+        result.columns = expected
+        for col in ["rep1", "rep2", "rep3"]:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+        result["mean_cfu"] = result[["rep1", "rep2", "rep3"]].mean(axis=1).round(3)
+        return result.dropna(subset=[name_col, "mean_cfu"])
+
+    return pd.DataFrame(columns=[name_col, "mean_cfu"])
+
+
+def normalize_key(value):
+    return "".join(ch.lower() for ch in str(value).strip() if ch.isalnum())
+
+
+def find_col(df, candidates):
+    if df is None or df.empty:
+        return None
+    col_map = {normalize_key(col): col for col in df.columns}
+    for candidate in candidates:
+        key = normalize_key(candidate)
+        if key in col_map:
+            return col_map[key]
+    return None
+
+
+def coerce_numeric(df, columns):
+    out = df.copy()
+    for col in columns:
+        if col and col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
+
+
+def lookup_kpi_value(df, labels, default):
+    name_col = find_col(df, ["metric", "name", "kpi"])
+    value_col = find_col(df, ["value", "score"])
+    if not name_col or not value_col:
+        return default
+
+    label_keys = {normalize_key(label) for label in labels}
+    temp = df[[name_col, value_col]].copy()
+    temp["_metric_key"] = temp[name_col].map(normalize_key)
+    match = temp[temp["_metric_key"].isin(label_keys)]
+    if match.empty:
+        return default
+    value = match[value_col].iloc[0]
+    return default if pd.isna(value) else str(value)
 
 
 def load_all():
@@ -127,6 +185,8 @@ def load_all():
 
     if "final_waterQuality_complete" in d:
         d["water_quality"] = d["final_waterQuality_complete"].copy()
+        if not d["water_quality"].empty:
+            d["villagewatercfu"] = d["water_quality"].copy()
     if "lake_full_integration" in d:
         d["lake_water_cfu"] = d["lake_full_integration"].copy()
     if "villagewatercfu" not in d or d.get("villagewatercfu", pd.DataFrame()).empty:
@@ -421,25 +481,59 @@ def insight_row(text, color):
 # PAGE RENDERERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def empty_fig(msg="No data available"):
+    fig = go.Figure()
+    fig.add_annotation(
+        text=msg,
+        x=0.5, y=0.5,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(size=14),
+    )
+    fig.update_layout(template="plotly_white")
+    return fig
+
+
 def page_overview(d):
-    rm   = d.get("riskMatrix", pd.DataFrame())
+    rm = d.get("riskMatrix", pd.DataFrame())
     proj = d.get("projectedOutcome", pd.DataFrame())
-    cp   = d.get("crossPillarIndex", pd.DataFrame())
+    cp = d.get("crossPillarIndex", pd.DataFrame())
+    oh_kpi = d.get("onehealth_kpi", pd.DataFrame())
+
+    overview_kpis = {
+        "Village Population": lookup_kpi_value(oh_kpi, ["Village Population", "Population"], "5,500"),
+        "PHC Services": lookup_kpi_value(oh_kpi, ["PHC Services", "PHC Service"], "8"),
+        "Stray Dogs in ABC": lookup_kpi_value(oh_kpi, ["Stray Dogs in ABC", "ABC Program", "ABC"], "550"),
+        "Water Sources Tested": lookup_kpi_value(oh_kpi, ["Water Sources Tested"], "10"),
+        "Top Risk Score": lookup_kpi_value(oh_kpi, ["Top Risk Score", "Top Risk"], "95"),
+    }
 
     # Radar — multi-factor risk
-    fig_risk = go.Figure()
-    if not rm.empty and all(col in rm.columns for col in ["factor", "likelihood", "impact", "urgency"]):
-        for col, c, name in [
-            ("likelihood", C_BLUE,   "Likelihood"),
-            ("impact",     C_RED,    "Impact"),
-            ("urgency",    C_AMBER,  "Urgency"),
-        ]:
-            vals = rm[col].tolist() + [rm[col].iloc[0]]
-            cats = rm["factor"].tolist() + [rm["factor"].iloc[0]]
+    factor_col = find_col(rm, ["factor"])
+    radar_cols = [
+        (find_col(rm, ["likelihood"]), C_BLUE, "Likelihood"),
+        (find_col(rm, ["impact"]), C_RED, "Impact"),
+        (find_col(rm, ["urgency"]), C_AMBER, "Urgency"),
+    ]
+    fig_risk = empty_fig("No risk matrix data available")
+    if factor_col and any(col for col, _, _ in radar_cols):
+        rm_plot = coerce_numeric(rm, [col for col, _, _ in radar_cols if col])
+        rm_plot = rm_plot[rm_plot[factor_col].notna()].copy()
+        fig_risk = go.Figure()
+        for col, color, name in radar_cols:
+            if not col:
+                continue
+            valid = rm_plot[[factor_col, col]].dropna()
+            if valid.empty:
+                continue
+            vals = valid[col].tolist() + [valid[col].iloc[0]]
+            cats = valid[factor_col].astype(str).tolist() + [str(valid[factor_col].iloc[0])]
             fig_risk.add_trace(go.Scatterpolar(
                 r=vals, theta=cats, name=name, fill="toself",
-                line=dict(color=c, width=2), fillcolor=rgba(c, 0.08),
+                line=dict(color=color, width=2), fillcolor=rgba(color, 0.08),
             ))
+        if not fig_risk.data:
+            fig_risk = empty_fig("No risk matrix data available")
     fig_risk.update_layout(
         **PLna("Multi-Factor Risk Radar"),
         polar=dict(
@@ -451,37 +545,52 @@ def page_overview(d):
     )
 
     # Projected outcome
-    fig_proj = go.Figure()
-    if not proj.empty and "year" in proj.columns:
-        for col, color, dash, name in [
-            ("noIntervention", C_RED,   "dot",   "No Intervention"),
-            ("partial",        C_AMBER, "dash",  "Partial One Health"),
-            ("fullOneHealth",  C_GREEN, "solid", "Full One Health"),
-        ]:
-            if col in proj.columns:
-                fig_proj.add_trace(go.Scatter(
-                    x=proj["year"], y=proj[col], name=name, mode="lines+markers",
-                    line=dict(color=color, width=2.5, dash=dash),
-                    marker=dict(size=7, color=color),
-                    fill="tozeroy" if col == "fullOneHealth" else "none",
-                    fillcolor=rgba(C_GREEN, 0.06),
-                ))
+    year_col = find_col(proj, ["year"])
+    proj_cols = [
+        (find_col(proj, ["noIntervention", "baseline"]), C_RED, "dot", "No Intervention"),
+        (find_col(proj, ["partial", "partialOneHealth"]), C_AMBER, "dash", "Partial One Health"),
+        (find_col(proj, ["fullOneHealth", "full"]), C_GREEN, "solid", "Full One Health"),
+    ]
+    fig_proj = empty_fig("No projected outcome data available")
+    if year_col and any(col for col, _, _, _ in proj_cols):
+        proj_plot = coerce_numeric(proj, [year_col] + [col for col, _, _, _ in proj_cols if col])
+        fig_proj = go.Figure()
+        for col, color, dash, name in proj_cols:
+            if not col:
+                continue
+            valid = proj_plot[[year_col, col]].dropna()
+            if valid.empty:
+                continue
+            fig_proj.add_trace(go.Scatter(
+                x=valid[year_col], y=valid[col], name=name, mode="lines+markers",
+                line=dict(color=color, width=2.5, dash=dash),
+                marker=dict(size=7, color=color),
+                fill="tozeroy" if name == "Full One Health" else "none",
+                fillcolor=rgba(C_GREEN, 0.06),
+            ))
+        if not fig_proj.data:
+            fig_proj = empty_fig("No projected outcome data available")
     fig_proj.update_layout(**PL("Projected Disease Burden 2025–2030",
                                  yaxis_title="Burden Index", xaxis_title="Year"))
 
     # Cross-pillar risk
-    fig_cross = go.Figure()
-    if not cp.empty and all(col in cp.columns for col in ["factor", "value"]):
-        cp_s = cp.sort_values("value", ascending=True).copy()
-        bar_colors = [C_GREEN if v < 50 else (C_AMBER if v < 70 else C_RED) for v in cp_s["value"]]
-        fig_cross.add_trace(go.Bar(
-            x=cp_s["value"], y=cp_s["factor"], orientation="h",
-            marker_color=bar_colors, marker_line_width=0,
-            hovertemplate="<b>%{y}</b><br>Risk Score: %{x}<extra></extra>",
-        ))
-        fig_cross.add_vline(x=70, line_dash="dot", line_color=C_RED,
-                            line_width=1.5, annotation_text="High risk",
-                            annotation_font=dict(color=C_RED, size=10))
+    cp_factor_col = find_col(cp, ["factor", "category"])
+    cp_value_col = find_col(cp, ["value", "score"])
+    fig_cross = empty_fig("No cross-pillar risk data available")
+    if cp_factor_col and cp_value_col:
+        cp_plot = coerce_numeric(cp, [cp_value_col]).dropna(subset=[cp_factor_col, cp_value_col]).copy()
+        if not cp_plot.empty:
+            cp_s = cp_plot.sort_values(cp_value_col, ascending=True)
+            bar_colors = [C_GREEN if v < 50 else (C_AMBER if v < 70 else C_RED) for v in cp_s[cp_value_col]]
+            fig_cross = go.Figure()
+            fig_cross.add_trace(go.Bar(
+                x=cp_s[cp_value_col], y=cp_s[cp_factor_col], orientation="h",
+                marker_color=bar_colors, marker_line_width=0,
+                hovertemplate="<b>%{y}</b><br>Risk Score: %{x}<extra></extra>",
+            ))
+            fig_cross.add_vline(x=70, line_dash="dot", line_color=C_RED,
+                                line_width=1.5, annotation_text="High risk",
+                                annotation_font=dict(color=C_RED, size=10))
     fig_cross.update_layout(**PL("Cross-Pillar Risk Index", xaxis_title="Risk Score"))
 
     return html.Div([
@@ -498,11 +607,11 @@ def page_overview(d):
         ),
         # 5 KPI cards
         html.Div([
-            kpi_card("Village Population",   "5,500",  "",          "Bettahalasuru, Karnataka",    "blue"),
-            kpi_card("PHC Services",         "8",      "programs",  "Screening + treatment",       "green"),
-            kpi_card("Stray Dogs in ABC",    "550",    "animals",   "Mar 2024 programme",          "amber"),
-            kpi_card("Water Sources Tested", "10",     "locations", "Village + lake combined",     "red"),
-            kpi_card("Top Risk Score",       "95",     "urgency",   "Water contamination",         "red"),
+            kpi_card("Village Population",   overview_kpis["Village Population"],   "",          "Bettahalasuru, Karnataka",    "blue"),
+            kpi_card("PHC Services",         overview_kpis["PHC Services"],         "programs",  "Screening + treatment",       "green"),
+            kpi_card("Stray Dogs in ABC",    overview_kpis["Stray Dogs in ABC"],    "animals",   "Mar 2024 programme",          "amber"),
+            kpi_card("Water Sources Tested", overview_kpis["Water Sources Tested"], "locations", "Village + lake combined",     "red"),
+            kpi_card("Top Risk Score",       overview_kpis["Top Risk Score"],       "urgency",   "Water contamination",         "red"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
         grid2([
@@ -537,33 +646,46 @@ def page_human(d):
     vi = d.get("vectorInsights",       pd.DataFrame())
 
     # Disease case-load bar
-    fig_dis = go.Figure()
-    if not md.empty and all(col in md.columns for col in ["disease", "cases"]):
-        md_s = md.sort_values("cases", ascending=True)
+    dis_col = find_col(md, ["disease"])
+    case_col = find_col(md, ["cases", "value"])
+    fig_dis = empty_fig("No disease case-load data available")
+    if dis_col and case_col:
+        md_s = coerce_numeric(md, [case_col]).dropna(subset=[dis_col, case_col]).sort_values(case_col, ascending=True)
         n = len(md_s)
-        clrs = [C_RED if i >= 2*n//3 else (C_AMBER if i >= n//3 else C_GREEN) for i in range(n)]
-        fig_dis.add_trace(go.Bar(
-            x=md_s["cases"], y=md_s["disease"], orientation="h",
-            marker_color=clrs, marker_line_width=0,
-            hovertemplate="<b>%{y}</b><br>Cases: %{x}<extra></extra>",
-        ))
+        if n:
+            clrs = [C_RED if i >= 2*n//3 else (C_AMBER if i >= n//3 else C_GREEN) for i in range(n)]
+            fig_dis = go.Figure()
+            fig_dis.add_trace(go.Bar(
+                x=md_s[case_col], y=md_s[dis_col], orientation="h",
+                marker_color=clrs, marker_line_width=0,
+                hovertemplate="<b>%{y}</b><br>Cases: %{x}<extra></extra>",
+            ))
     fig_dis.update_layout(**PL("Major Diseases at PHC (2020–2024)", xaxis_title="Cases Reported"))
 
     # Vector disease trend
-    fig_vec = go.Figure()
-    if not vt.empty and "year" in vt.columns:
+    year_col = find_col(vt, ["year"])
+    fig_vec = empty_fig("No vector disease trend data available")
+    if year_col:
+        vt_plot = coerce_numeric(vt, [year_col])
+        fig_vec = go.Figure()
         for col, dash, color, name in [
-            ("malaria",       "solid", C_BLUE,   "Malaria"),
-            ("dengue",        "solid", C_RED,    "Dengue"),
-            ("chikungunya",   "dash",  C_PURPLE, "Chikungunya"),
-            ("leptospirosis", "dot",   C_GREEN,  "Leptospirosis"),
+            (find_col(vt, ["malaria"]),       "solid", C_BLUE,   "Malaria"),
+            (find_col(vt, ["dengue"]),        "solid", C_RED,    "Dengue"),
+            (find_col(vt, ["chikungunya"]),   "dash",  C_PURPLE, "Chikungunya"),
+            (find_col(vt, ["leptospirosis"]), "dot",   C_GREEN,  "Leptospirosis"),
         ]:
-            if col in vt.columns:
+            if col:
+                vt_plot = coerce_numeric(vt_plot, [col])
+                valid = vt_plot[[year_col, col]].dropna()
+                if valid.empty:
+                    continue
                 fig_vec.add_trace(go.Scatter(
-                    x=vt["year"], y=vt[col], name=name, mode="lines+markers",
+                    x=valid[year_col], y=valid[col], name=name, mode="lines+markers",
                     line=dict(color=color, width=2.2, dash=dash),
                     marker=dict(size=7, color=color),
                 ))
+        if not fig_vec.data:
+            fig_vec = empty_fig("No vector disease trend data available")
     fig_vec.update_layout(**PL("Vector-Borne Disease Trend 2020–2024", yaxis_title="Cases", xaxis_title="Year"))
 
     # Disease burden severity
@@ -698,34 +820,47 @@ def page_animal(d):
     ai  = d.get("animalInsights",   pd.DataFrame())
 
     # Rabies projection
-    fig_rab = go.Figure()
-    if not rp.empty and "year" in rp.columns:
+    rp_year_col = find_col(rp, ["year"])
+    fig_rab = empty_fig("No rabies projection data available")
+    if rp_year_col:
+        rp_plot = coerce_numeric(rp, [rp_year_col])
+        fig_rab = go.Figure()
         for col, color, dash, name in [
-            ("noAbc",            C_RED,   "dot",   "No ABC"),
-            ("withAbc",          C_AMBER, "dash",  "ABC Only"),
-            ("withAbcVaccination", C_GREEN, "solid", "ABC + Vaccination"),
+            (find_col(rp, ["noAbc"]), C_RED, "dot", "No ABC"),
+            (find_col(rp, ["withAbc"]), C_AMBER, "dash", "ABC Only"),
+            (find_col(rp, ["withAbcVaccination"]), C_GREEN, "solid", "ABC + Vaccination"),
         ]:
-            if col in rp.columns:
+            if col:
+                rp_plot = coerce_numeric(rp_plot, [col])
+                valid = rp_plot[[rp_year_col, col]].dropna()
+                if valid.empty:
+                    continue
                 fig_rab.add_trace(go.Scatter(
-                    x=rp["year"], y=rp[col], name=name, mode="lines+markers",
+                    x=valid[rp_year_col], y=valid[col], name=name, mode="lines+markers",
                     line=dict(color=color, width=2.5, dash=dash),
                     marker=dict(size=7, color=color),
-                    fill="tozeroy" if col == "noAbc" else "none",
+                    fill="tozeroy" if name == "No ABC" else "none",
                     fillcolor=rgba(C_RED, 0.05),
                 ))
+        if not fig_rab.data:
+            fig_rab = empty_fig("No rabies projection data available")
     fig_rab.update_layout(**PL("Rabies Projection — 5-Year Model",
                                 yaxis_title="Infected Animals", xaxis_title="Year"))
 
     # ABC programme bar
-    fig_abc = go.Figure()
-    if not abc.empty and all(col in abc.columns for col in ["activity", "count"]):
+    abc_activity_col = find_col(abc, ["activity"])
+    abc_count_col = find_col(abc, ["count", "value"])
+    fig_abc = empty_fig("No ABC programme data available")
+    if abc_activity_col and abc_count_col:
+        abc_plot = coerce_numeric(abc, [abc_count_col]).dropna(subset=[abc_activity_col, abc_count_col])
         step_cols = [C_RED, C_AMBER, C_AMBER, C_AMBER, C_AMBER, C_AMBER, C_GREEN]
-        for i, (_, row) in enumerate(abc.iterrows()):
+        fig_abc = go.Figure()
+        for i, (_, row) in enumerate(abc_plot.iterrows()):
             fig_abc.add_trace(go.Bar(
-                x=[row["count"]], y=[row["activity"]], orientation="h",
+                x=[row[abc_count_col]], y=[row[abc_activity_col]], orientation="h",
                 marker_color=step_cols[min(i, len(step_cols) - 1)],
                 showlegend=False,
-                hovertemplate=f"<b>{row['activity']}</b><br>Animals: {row['count']}<extra></extra>",
+                hovertemplate=f"<b>{row[abc_activity_col]}</b><br>Animals: {row[abc_count_col]}<extra></extra>",
             ))
     abc_pl = {k: v for k, v in PL("ABC Programme — March 2024 (17 Dogs)").items() if k != "xaxis"}
     fig_abc.update_layout(**abc_pl, xaxis=dict(
@@ -734,18 +869,24 @@ def page_animal(d):
     ))
 
     # AMR residue chart
-    fig_amr = go.Figure()
-    if not amr.empty and all(col in amr.columns for col in ["antibiotic", "sampleType", "levelFound", "permissible"]):
-        amr_v = amr[amr["permissible"].notna()].copy()
+    amr_antibiotic_col = find_col(amr, ["antibiotic"])
+    amr_sample_col = find_col(amr, ["sampleType", "sample_type"])
+    amr_level_col = find_col(amr, ["levelFound", "level_found"])
+    amr_limit_col = find_col(amr, ["permissible", "limit"])
+    fig_amr = empty_fig("No AMR findings data available")
+    if amr_antibiotic_col and amr_sample_col and amr_level_col and amr_limit_col:
+        amr_v = coerce_numeric(amr, [amr_level_col, amr_limit_col])
+        amr_v = amr_v.dropna(subset=[amr_antibiotic_col, amr_sample_col, amr_level_col, amr_limit_col]).copy()
         if not amr_v.empty:
+            fig_amr = go.Figure()
             fig_amr.add_trace(go.Bar(
-                x=amr_v["antibiotic"].astype(str) + " / " + amr_v["sampleType"].astype(str),
-                y=amr_v["levelFound"], name="Level Found", marker_color=C_BLUE,
-                marker_line_width=0, borderRadius=4,
+                x=amr_v[amr_antibiotic_col].astype(str) + " / " + amr_v[amr_sample_col].astype(str),
+                y=amr_v[amr_level_col], name="Level Found", marker_color=C_BLUE,
+                marker_line_width=0,
             ))
             fig_amr.add_trace(go.Scatter(
-                x=amr_v["antibiotic"].astype(str) + " / " + amr_v["sampleType"].astype(str),
-                y=amr_v["permissible"], name="Permissible Limit", mode="markers",
+                x=amr_v[amr_antibiotic_col].astype(str) + " / " + amr_v[amr_sample_col].astype(str),
+                y=amr_v[amr_limit_col], name="Permissible Limit", mode="markers",
                 marker=dict(color=C_RED, size=14, symbol="line-ew",
                             line=dict(width=3, color=C_RED)),
             ))
@@ -874,70 +1015,91 @@ def page_environment(d):
     pv  = d.get("physiochem_village_waterquality", pd.DataFrame())
 
     # Water quality scatter
-    fig_wq = go.Figure()
-    needed = {"TDS_ppm", "DO_mg_L", "drinking_status", "turbidity_NTU", "source_name"}
-    if not wq.empty and needed.issubset(set(wq.columns)):
+    wq_tds_col = find_col(wq, ["TDS_ppm", "TDS"])
+    wq_do_col = find_col(wq, ["DO_mg_L", "DO"])
+    wq_status_col = find_col(wq, ["drinking_status", "drinkingStatus"])
+    wq_turbidity_col = find_col(wq, ["turbidity_NTU", "turbidity"])
+    wq_source_col = find_col(wq, ["source_name", "sourceName", "source", "location"])
+    fig_wq = empty_fig("No water quality data available")
+    if all([wq_tds_col, wq_do_col, wq_status_col, wq_turbidity_col, wq_source_col]):
+        wq_plot = coerce_numeric(wq, [wq_tds_col, wq_do_col, wq_turbidity_col])
+        wq_plot = wq_plot.dropna(subset=[wq_tds_col, wq_do_col, wq_turbidity_col, wq_status_col, wq_source_col]).copy()
         color_map = {"Unfit": C_RED, "Treat First": C_AMBER, "Borderline": C_PURPLE, "Agriculture": C_GREEN}
-        fig_wq = px.scatter(
-            wq, x="TDS_ppm", y="DO_mg_L", color="drinking_status",
-            color_discrete_map=color_map, size="turbidity_NTU", size_max=35,
-            hover_name="source_name",
-            title="Water Quality — TDS vs Dissolved Oxygen",
-            labels={"TDS_ppm": "TDS (ppm)", "DO_mg_L": "DO (mg/L)", "drinking_status": "Status"},
-            hover_data=[c for c in ["pH", "EC_mS", "turbidity_NTU"] if c in wq.columns],
-        )
-        fig_wq.add_vline(x=500, line_dash="dot", line_color=C_BLUE, line_width=1.5,
-                         annotation_text="TDS safe ≤500", annotation_font=dict(color=C_BLUE, size=10))
-        fig_wq.add_hline(y=6, line_dash="dot", line_color=C_GREEN, line_width=1.5,
-                         annotation_text="DO safe ≥6", annotation_font=dict(color=C_GREEN, size=10))
-        fig_wq.update_layout(**PL())
-    else:
-        fig_wq.update_layout(**PL("Water Quality — TDS vs Dissolved Oxygen"))
+        if not wq_plot.empty:
+            fig_wq = px.scatter(
+                wq_plot, x=wq_tds_col, y=wq_do_col, color=wq_status_col,
+                color_discrete_map=color_map, size=wq_turbidity_col, size_max=35,
+                hover_name=wq_source_col,
+                title="Water Quality — TDS vs Dissolved Oxygen",
+                labels={wq_tds_col: "TDS (ppm)", wq_do_col: "DO (mg/L)", wq_status_col: "Status"},
+                hover_data=[c for c in [find_col(wq_plot, ["pH"]), find_col(wq_plot, ["EC_mS", "EC_uS"]), wq_turbidity_col] if c],
+            )
+            fig_wq.add_vline(x=500, line_dash="dot", line_color=C_BLUE, line_width=1.5,
+                             annotation_text="TDS safe ≤500", annotation_font=dict(color=C_BLUE, size=10))
+            fig_wq.add_hline(y=6, line_dash="dot", line_color=C_GREEN, line_width=1.5,
+                             annotation_text="DO safe ≥6", annotation_font=dict(color=C_GREEN, size=10))
+            fig_wq.update_layout(**PL())
+    fig_wq.update_layout(**PL("Water Quality — TDS vs Dissolved Oxygen"))
 
     # Village water CFU
-    fig_vc = go.Figure()
-    if not vc.empty and all(col in vc.columns for col in ["source", "mean_cfu"]):
-        vc_s = vc.sort_values("mean_cfu")
+    vc_source_col = find_col(vc, ["source", "source_name", "sourceName", "sample", "location"])
+    vc_mean_col = find_col(vc, ["mean_cfu", "CFU_avg", "CFU avg"])
+    fig_vc = empty_fig("No village water CFU data available")
+    if vc_source_col and vc_mean_col:
+        vc_s = coerce_numeric(vc, [vc_mean_col]).dropna(subset=[vc_source_col, vc_mean_col]).sort_values(vc_mean_col)
         n = len(vc_s)
-        bclr = [C_GREEN if i < max(1, n // 2) else C_BLUE for i in range(n)]
-        fig_vc.add_trace(go.Bar(
-            x=vc_s["mean_cfu"], y=vc_s["source"], orientation="h",
-            marker_color=bclr, marker_line_width=0,
-            hovertemplate="<b>%{y}</b><br>%{x:.3f} CFU/mL<extra></extra>",
-        ))
+        if n:
+            bclr = [C_GREEN if i < max(1, n // 2) else C_BLUE for i in range(n)]
+            fig_vc = go.Figure()
+            fig_vc.add_trace(go.Bar(
+                x=vc_s[vc_mean_col], y=vc_s[vc_source_col], orientation="h",
+                marker_color=bclr, marker_line_width=0,
+                hovertemplate="<b>%{y}</b><br>%{x:.3f} CFU/mL<extra></extra>",
+            ))
     fig_vc.update_layout(**PL("Village Water — Mean CFU/mL", xaxis_title="CFU/mL"))
 
     # Lake water CFU
-    fig_lc = go.Figure()
-    if not lc.empty and all(col in lc.columns for col in ["sample", "mean_cfu"]):
-        lc_s = lc.sort_values("mean_cfu", ascending=False)
+    lc_sample_col = find_col(lc, ["sample", "location", "source"])
+    lc_mean_col = find_col(lc, ["mean_cfu", "CFU_avg", "CFU avg"])
+    fig_lc = empty_fig("No lake water CFU data available")
+    if lc_sample_col and lc_mean_col:
+        lc_s = coerce_numeric(lc, [lc_mean_col]).dropna(subset=[lc_sample_col, lc_mean_col]).sort_values(lc_mean_col, ascending=False)
         n = len(lc_s)
-        bclr = [C_RED if i < max(1, n // 3) else (C_AMBER if i < max(2, 2 * n // 3) else C_BLUE) for i in range(n)]
-        fig_lc.add_trace(go.Bar(
-            x=lc_s["sample"], y=lc_s["mean_cfu"],
-            marker_color=bclr, marker_line_width=0,
-            hovertemplate="<b>%{x}</b><br>%{y:.3f} CFU/mL<extra></extra>",
-        ))
+        if n:
+            bclr = [C_RED if i < max(1, n // 3) else (C_AMBER if i < max(2, 2 * n // 3) else C_BLUE) for i in range(n)]
+            fig_lc = go.Figure()
+            fig_lc.add_trace(go.Bar(
+                x=lc_s[lc_sample_col], y=lc_s[lc_mean_col],
+                marker_color=bclr, marker_line_width=0,
+                hovertemplate="<b>%{x}</b><br>%{y:.3f} CFU/mL<extra></extra>",
+            ))
     fig_lc.update_layout(**PL("Lake Entry Points — Mean CFU/mL", yaxis_title="CFU/mL"))
     fig_lc.update_xaxes(tickangle=-25)
 
     # Soil CFU
-    fig_soil = go.Figure()
-    if not sc.empty and all(col in sc.columns for col in ["sample", "mean_cfu"]):
-        colors = [C_RED, C_BLUE, C_GREEN] * ((len(sc) // 3) + 1)
-        fig_soil.add_trace(go.Bar(
-            x=sc["sample"], y=sc["mean_cfu"],
-            marker_color=colors[:len(sc)], marker_line_width=0,
-            hovertemplate="<b>%{x}</b><br>%{y:.4f} CFU/mL<extra></extra>",
-        ))
+    sc_sample_col = find_col(sc, ["sample", "Sample", "site_name", "location"])
+    sc_mean_col = find_col(sc, ["mean_cfu", "CFU avg", "CFU_avg"])
+    fig_soil = empty_fig("No soil CFU data available")
+    if sc_sample_col and sc_mean_col:
+        sc_plot = coerce_numeric(sc, [sc_mean_col]).dropna(subset=[sc_sample_col, sc_mean_col]).copy()
+        if not sc_plot.empty:
+            colors = [C_RED, C_BLUE, C_GREEN] * ((len(sc_plot) // 3) + 1)
+            fig_soil = go.Figure()
+            fig_soil.add_trace(go.Bar(
+                x=sc_plot[sc_sample_col], y=sc_plot[sc_mean_col],
+                marker_color=colors[:len(sc_plot)], marker_line_width=0,
+                hovertemplate="<b>%{x}</b><br>%{y:.4f} CFU/mL<extra></extra>",
+            ))
     fig_soil.update_layout(**PL("Soil CFU by Site", yaxis_title="CFU/mL"))
 
     # Gram staining pie
-    fig_gr = go.Figure()
-    if not gt.empty and "gram_negative_percent" in gt.columns:
+    gt_neg_col = find_col(gt, ["gram_negative_percent"])
+    fig_gr = empty_fig("No gram staining data available")
+    if gt_neg_col:
         g = gt.iloc[0]
-        val = pd.to_numeric(g["gram_negative_percent"], errors="coerce")
+        val = pd.to_numeric(g[gt_neg_col], errors="coerce")
         if pd.notna(val):
+            fig_gr = go.Figure()
             fig_gr.add_trace(go.Pie(
                 labels=["Gram Negative", "Gram Positive"],
                 values=[val, 100 - val],
@@ -949,10 +1111,12 @@ def page_environment(d):
 
     # AQI gauge
     aqi_val = 135
-    if not aq.empty and all(col in aq.columns for col in ["parameter", "value"]):
-        row = aq[aq["parameter"] == "AQI"]
+    aq_param_col = find_col(aq, ["parameter"])
+    aq_value_col = find_col(aq, ["value"])
+    if aq_param_col and aq_value_col:
+        row = aq[aq[aq_param_col].astype(str).str.strip().str.upper() == "AQI"]
         if not row.empty:
-            v = pd.to_numeric(row["value"].iloc[0], errors="coerce")
+            v = pd.to_numeric(row[aq_value_col].iloc[0], errors="coerce")
             if pd.notna(v):
                 aqi_val = v
 
@@ -1105,63 +1269,99 @@ def page_interconnections(d):
     rm   = d.get("riskMatrix",           pd.DataFrame())
 
     # Zoonotic transmission stacked
-    fig_zoo = go.Figure()
-    if not zoo.empty and "pathway" in zoo.columns:
+    zoo_pathway_col = find_col(zoo, ["pathway"])
+    fig_zoo = empty_fig("No zoonotic transmission data available")
+    if zoo_pathway_col:
+        zoo_plot = coerce_numeric(zoo, [
+            find_col(zoo, ["directContact"]),
+            find_col(zoo, ["environmental"]),
+            find_col(zoo, ["foodWater"]),
+            find_col(zoo, ["vectorMediated"]),
+        ])
+        fig_zoo = go.Figure()
         for col, c, name in [
-            ("directContact",  C_RED,    "Direct Contact"),
-            ("environmental",  C_GREEN,  "Environmental"),
-            ("foodWater",      C_AMBER,  "Food / Water"),
-            ("vectorMediated", C_BLUE,   "Vector Mediated"),
+            (find_col(zoo, ["directContact"]), C_RED, "Direct Contact"),
+            (find_col(zoo, ["environmental"]), C_GREEN, "Environmental"),
+            (find_col(zoo, ["foodWater"]), C_AMBER, "Food / Water"),
+            (find_col(zoo, ["vectorMediated"]), C_BLUE, "Vector Mediated"),
         ]:
-            if col in zoo.columns:
-                fig_zoo.add_trace(go.Bar(x=zoo["pathway"], y=zoo[col], name=name, marker_color=c))
+            if col:
+                valid = zoo_plot[[zoo_pathway_col, col]].dropna()
+                if valid.empty:
+                    continue
+                fig_zoo.add_trace(go.Bar(x=valid[zoo_pathway_col], y=valid[col], name=name, marker_color=c))
+        if not fig_zoo.data:
+            fig_zoo = empty_fig("No zoonotic transmission data available")
     fig_zoo.update_layout(**PL("Zoonotic Transmission Pathways", barmode="stack", yaxis_title="Transmission %"))
     fig_zoo.update_xaxes(tickangle=-15)
 
     # Rainfall vs disease
-    fig_rain = go.Figure()
-    if not rd.empty and "rainfallIndex" in rd.columns:
+    rd_rain_col = find_col(rd, ["rainfallIndex"])
+    rd_year_col = find_col(rd, ["year"])
+    fig_rain = empty_fig("No rainfall-disease data available")
+    if rd_rain_col:
+        rd_plot = coerce_numeric(rd, [rd_rain_col, rd_year_col] if rd_year_col else [rd_rain_col])
+        fig_rain = go.Figure()
         for col, c, name in [
-            ("dengueCases",    C_RED,    "Dengue"),
-            ("malariaCases",   C_PURPLE, "Malaria"),
-            ("leptospirosis",  C_GREEN,  "Leptospirosis"),
+            (find_col(rd, ["dengueCases"]), C_RED, "Dengue"),
+            (find_col(rd, ["malariaCases"]), C_PURPLE, "Malaria"),
+            (find_col(rd, ["leptospirosis"]), C_GREEN, "Leptospirosis"),
         ]:
-            if col in rd.columns:
+            if col:
+                rd_plot = coerce_numeric(rd_plot, [col])
+                valid = rd_plot[[rd_rain_col, col] + ([rd_year_col] if rd_year_col else [])].dropna(subset=[rd_rain_col, col])
+                if valid.empty:
+                    continue
                 fig_rain.add_trace(go.Scatter(
-                    x=rd["rainfallIndex"], y=rd[col], name=name,
+                    x=valid[rd_rain_col], y=valid[col], name=name,
                     mode="markers+lines", marker=dict(size=10, color=c),
                     line=dict(color=c, width=1.8),
-                    text=rd["year"] if "year" in rd.columns else None,
+                    text=valid[rd_year_col] if rd_year_col else None,
                     hovertemplate=f"<b>{name}</b><br>Rainfall: %{{x}}<br>Cases: %{{y}}<extra></extra>",
                 ))
+        if not fig_rain.data:
+            fig_rain = empty_fig("No rainfall-disease data available")
     fig_rain.update_layout(**PL("Rainfall Index vs Vector Disease Cases",
                                  xaxis_title="Rainfall Index", yaxis_title="Cases"))
 
     # Interaction strength before/after
-    fig_int = go.Figure()
-    if not ints.empty and all(col in ints.columns for col in ["interaction", "current", "afterIntervention"]):
-        fig_int.add_trace(go.Bar(x=ints["interaction"], y=ints["current"],
-                                  name="Current", marker_color=C_RED, marker_line_width=0, borderRadius=6))
-        fig_int.add_trace(go.Bar(x=ints["interaction"], y=ints["afterIntervention"],
-                                  name="After Intervention", marker_color=rgba(C_GREEN, 0.6),
-                                  marker_line_color=C_GREEN, marker_line_width=1.5, borderRadius=6))
+    ints_label_col = find_col(ints, ["interaction"])
+    ints_current_col = find_col(ints, ["current"])
+    ints_after_col = find_col(ints, ["afterIntervention", "after_intervention"])
+    fig_int = empty_fig("No interaction strength data available")
+    if ints_label_col and ints_current_col and ints_after_col:
+        ints_plot = coerce_numeric(ints, [ints_current_col, ints_after_col]).dropna(subset=[ints_label_col, ints_current_col, ints_after_col])
+        if not ints_plot.empty:
+            fig_int = go.Figure()
+            fig_int.add_trace(go.Bar(x=ints_plot[ints_label_col], y=ints_plot[ints_current_col],
+                                      name="Current", marker_color=C_RED, marker_line_width=0))
+            fig_int.add_trace(go.Bar(x=ints_plot[ints_label_col], y=ints_plot[ints_after_col],
+                                      name="After Intervention", marker_color=rgba(C_GREEN, 0.6),
+                                      marker_line_color=C_GREEN, marker_line_width=1.5))
     fig_int.update_layout(**PL("Cross-Pillar Interaction — Before vs After",
                                 barmode="group", yaxis_title="Interaction Score"))
 
     # Risk bubble chart
-    fig_bub = go.Figure()
-    if not rm.empty and all(col in rm.columns for col in ["likelihood", "impact", "urgency", "factor"]):
-        fig_bub = px.scatter(
-            rm, x="likelihood", y="impact", size="urgency",
-            hover_name="factor", text="factor", size_max=55,
-            color="urgency",
+    rm_likelihood_col = find_col(rm, ["likelihood"])
+    rm_impact_col = find_col(rm, ["impact"])
+    rm_urgency_col = find_col(rm, ["urgency"])
+    rm_factor_col = find_col(rm, ["factor"])
+    fig_bub = empty_fig("No risk matrix data available")
+    if rm_likelihood_col and rm_impact_col and rm_urgency_col and rm_factor_col:
+        rm_plot = coerce_numeric(rm, [rm_likelihood_col, rm_impact_col, rm_urgency_col])
+        rm_plot = rm_plot.dropna(subset=[rm_likelihood_col, rm_impact_col, rm_urgency_col, rm_factor_col]).copy()
+        if not rm_plot.empty:
+            fig_bub = px.scatter(
+            rm_plot, x=rm_likelihood_col, y=rm_impact_col, size=rm_urgency_col,
+            hover_name=rm_factor_col, text=rm_factor_col, size_max=55,
+            color=rm_urgency_col,
             color_continuous_scale=[[0, C_GREEN], [0.4, C_AMBER], [0.7, C_RED], [1, "#7f1d1d"]],
             title="Risk Matrix — Likelihood vs Impact (size = Urgency)",
-            labels={"likelihood": "Likelihood (%)", "impact": "Impact Score"},
-        )
-        fig_bub.update_traces(textposition="top center", textfont=dict(size=9, color=MUTED))
-        fig_bub.update_layout(**PL())
-        fig_bub.update_coloraxes(colorbar_tickfont_color=MUTED, colorbar_title_font_color=MUTED)
+            labels={rm_likelihood_col: "Likelihood (%)", rm_impact_col: "Impact Score"},
+            )
+            fig_bub.update_traces(textposition="top center", textfont=dict(size=9, color=MUTED))
+            fig_bub.update_layout(**PL())
+            fig_bub.update_coloraxes(colorbar_tickfont_color=MUTED, colorbar_title_font_color=MUTED)
 
     return html.Div([
         section_banner("Interconnectedness", "HOW HUMAN · ANIMAL · ENVIRONMENT HEALTH ARE LINKED IN BETTAHALASURU"),
@@ -1235,6 +1435,23 @@ def page_interconnections(d):
 # ══════════════════════════════════════════════════════════════════════════════
 # APP LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
+
+def page_guard(page_fn):
+    def wrapped(d):
+        try:
+            return page_fn(d)
+        except Exception as e:
+            print(f"[ERROR] Page failed: {e}")
+            return html.Div("Error loading page")
+    return wrapped
+
+
+page_overview = page_guard(page_overview)
+page_human = page_guard(page_human)
+page_animal = page_guard(page_animal)
+page_environment = page_guard(page_environment)
+page_interconnections = page_guard(page_interconnections)
+
 
 app.index_string = """<!DOCTYPE html>
 <html>
