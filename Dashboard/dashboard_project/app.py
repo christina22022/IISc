@@ -64,7 +64,6 @@ TABS = {
     "projectedOutcome":      ("inter_id", "projectedOutcome"),
 
     # ───────── OVERVIEW ─────────
-    "onehealth_kpi":         ("overview_id", "onehealth_kpi"),
     "onehealth_summary":     ("overview_id", "onehealth_summary"),
     "onehealth_risk":        ("overview_id", "onehealth_risk"),
 }
@@ -159,7 +158,7 @@ def coerce_numeric(df, columns):
 
 
 def lookup_kpi_value(df, labels, default):
-    name_col = find_col(df, ["metric", "name", "kpi"])
+    name_col = find_col(df, ["metric", "name", "kpi", "field"])
     value_col = find_col(df, ["value", "score"])
     if not name_col or not value_col:
         return default
@@ -174,21 +173,90 @@ def lookup_kpi_value(df, labels, default):
     return default if pd.isna(value) else str(value)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW: Wide-format KPI lookup
+# After load_all() pivots a 2-column sheet (field → col headers, value → row 0),
+# we look up a value directly by the column name rather than searching rows.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def kpi_val_from_wide(df, field_names, default="—"):
+    """
+    Look up a value from a WIDE (transposed) single-row KPI DataFrame.
+    The sheet originally had rows like:
+        location       | Bettahalasuru
+        strayDogs      | 74
+        abcProgram     | 17+
+    After load_all() pivots it, each field name becomes a column header,
+    and row 0 holds the value. We match field_names by normalized key.
+    """
+    if df is None or df.empty:
+        return default
+    col_map = {normalize_key(col): col for col in df.columns}
+    for fname in field_names:
+        key = normalize_key(fname)
+        if key in col_map:
+            actual_col = col_map[key]
+            val = df[actual_col].iloc[0]
+            if pd.notna(val) and str(val).strip() not in ("", "nan"):
+                return str(val).strip()
+    return default
+
+
 def load_all():
+    import re
     d = {}
+
     for t in TABS.keys():
         try:
-            d[t] = fetch(t)
+            df = fetch(t)
+
+            # ✅ Ensure it's a proper DataFrame
+            if not isinstance(df, pd.DataFrame):
+                try:
+                    df = pd.DataFrame(df)
+                except Exception:
+                    df = pd.DataFrame()
+
+            # ── Convert vertical → horizontal ──
+            if df.shape[1] == 2:
+                try:
+                    df = df.set_index(df.columns[0]).T.reset_index(drop=True)
+                except Exception:
+                    pass
+
+            # ── Clean values safely (NO applymap) ──
+            def clean_val(x):
+                if isinstance(x, str):
+                    x = x.strip()
+                    x = x.replace("+", "").replace("%", "")
+
+                    if re.match(r"^\d+\s*-\s*\d+$", x):
+                        a, b = re.split(r"\s*-\s*", x)
+                        try:
+                            return (float(a) + float(b)) / 2
+                        except:
+                            return x
+                return x
+
+            for col in df.columns:
+                df[col] = df[col].apply(clean_val)
+
+            d[t] = df
+
         except Exception as e:
             print(f"[ERROR] Could not load {t}: {e}")
             d[t] = pd.DataFrame()
+
+    # ── KEEP YOUR ORIGINAL LOGIC ──
 
     if "final_waterQuality_complete" in d:
         d["water_quality"] = d["final_waterQuality_complete"].copy()
         if not d["water_quality"].empty:
             d["villagewatercfu"] = d["water_quality"].copy()
+
     if "lake_full_integration" in d:
         d["lake_water_cfu"] = d["lake_full_integration"].copy()
+
     if "villagewatercfu" not in d or d.get("villagewatercfu", pd.DataFrame()).empty:
         if "soil_data" in d and not d["soil_data"].empty:
             d["villagewatercfu"] = d["soil_data"].copy()
@@ -203,7 +271,6 @@ def load_all():
     d["soil_cfu"]        = safe_mean_cfu(d.get("soil_cfu",        pd.DataFrame()), "sample")
 
     return d
-
 
 DATA = load_all()
 
@@ -498,24 +565,301 @@ def fmt_num(val, default="—"):
 
 
 def _extract_header_values(data):
-    """Return (aqi_str, population_str) from freshly loaded data."""
+    """
+    Return (aqi_str, population_str) from freshly loaded data.
+    population_str now reads totalPopulation from human kpi_data (wide format).
+    """
     aqi_str = "—"
     aq = data.get("air_quality", pd.DataFrame())
     aq_param_col = find_col(aq, ["parameter", "param", "metric"])
     aq_value_col = find_col(aq, ["value", "reading", "measurement"])
     if aq_param_col and aq_value_col and not aq.empty:
-        for _, aq_row in aq.iterrows():
-            if str(aq_row[aq_param_col]).strip().upper() == "AQI":
-                v = pd.to_numeric(aq_row[aq_value_col], errors="coerce")
-                if pd.notna(v):
-                    aqi_str = str(int(round(v)))
-                break
+        aqi_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper() == "AQI"]
+        if not aqi_rows.empty:
+            vals = pd.to_numeric(aqi_rows[aq_value_col], errors="coerce").dropna()
+            if not vals.empty:
+                aqi_str = str(int(round(vals.mean())))
 
-    pop_str = lookup_kpi_value(
-        data.get("onehealth_kpi", pd.DataFrame()),
-        ["Village Population", "Population"], "—"
+    # ── FIX: read totalPopulation from wide kpi_data ──
+    pop_str = "—"
+    kpi_df = data.get("kpi_data", pd.DataFrame())
+    # Try wide-format first (after pivot, totalPopulation is a column name)
+    pop_wide = kpi_val_from_wide(
+        kpi_df,
+        ["totalPopulation", "total_population", "Total Population", "Population"],
+        default=None
     )
+    if pop_wide is not None:
+        pop_str = pop_wide
+    else:
+        # Fallback: old vertical lookup
+        kpi_field_col = find_col(kpi_df, ["field", "metric", "name", "kpi", "location"])
+        kpi_value_col = find_col(kpi_df, ["value", "score"])
+        if kpi_field_col and kpi_value_col and not kpi_df.empty:
+            for _, row in kpi_df.iterrows():
+                nk = normalize_key(str(row[kpi_field_col]))
+                if nk in ("totalpopulation", "population"):
+                    v = row[kpi_value_col]
+                    if pd.notna(v):
+                        pop_str = str(v)
+                    break
+
     return aqi_str, pop_str
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OVERVIEW PAGE HELPER FUNCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_overview_kpis(d):
+    """
+    Fetch all Overview KPI values from their respective sheets/tabs.
+    Handles WIDE (transposed) single-row sheets produced by load_all().
+    Returns a dict of display-ready strings.
+    """
+    kpis = {}
+
+    # ── Human kpi_data (wide after pivot) ────────────────────────────────
+    kpi_df = d.get("kpi_data", pd.DataFrame())
+
+    # Households
+    kpis["households"] = kpi_val_from_wide(
+        kpi_df,
+        ["household", "households", "Household", "Households"],
+        default="—"
+    )
+
+    # Total Population (for display on overview pillar row)
+    kpis["total_population"] = kpi_val_from_wide(
+        kpi_df,
+        ["totalPopulation", "total_population", "Total Population", "Population"],
+        default="—"
+    )
+
+    # ── Animal kpi_data (wide after pivot) ───────────────────────────────
+    akpi = d.get("animal_kpi_data", pd.DataFrame())
+
+    kpis["livestock"] = kpi_val_from_wide(
+        akpi,
+        ["livestockMonitored", "livestock_monitored", "livestock", "Livestock"],
+        default="—"
+    )
+    kpis["stray_dogs"] = kpi_val_from_wide(
+        akpi,
+        ["strayDogs", "stray_dogs", "stray dogs", "StrayDogs"],
+        default="—"
+    )
+    kpis["abc_count"] = kpi_val_from_wide(
+        akpi,
+        ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "ABC", "abcCount"],
+        default="—"
+    )
+    kpis["avian"] = kpi_val_from_wide(
+        akpi,
+        ["avianSpecies", "avain_species", "avianspecies", "avainSpecies", "avian species",
+         "avain species", "avain", "avian"],
+        default="—"
+    )
+
+    # ── AQI — Environment / air_quality ──────────────────────────────────
+    aq = d.get("air_quality", pd.DataFrame())
+    aq_param_col = find_col(aq, ["parameter", "param", "metric", "field"])
+    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
+    kpis["aqi"] = "—"
+    if aq_param_col and aq_value_col and not aq.empty:
+        aqi_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper() == "AQI"]
+        if not aqi_rows.empty:
+            vals = pd.to_numeric(aqi_rows[aq_value_col], errors="coerce").dropna()
+            if not vals.empty:
+                kpis["aqi"] = fmt_num(round(vals.mean()))
+
+    # ── Humidity — Environment / air_quality ─────────────────────────────
+    kpis["humidity"] = "—"
+    if aq_param_col and aq_value_col and not aq.empty:
+        hum_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper().isin(
+            ["HUMIDITY", "RH", "RELATIVE HUMIDITY", "AMBIENT HUMIDITY"]
+        )]
+        if not hum_rows.empty:
+            vals = pd.to_numeric(hum_rows[aq_value_col], errors="coerce").dropna()
+            if not vals.empty:
+                kpis["humidity"] = fmt_num(round(vals.mean(), 1))
+
+    # ── Water Sources Tested ──────────────────────────────────────────────
+    wq = d.get("final_waterQuality_complete", pd.DataFrame())
+    kpis["water_sources"] = "—"
+    if not wq.empty:
+        sid_col = find_col(wq, ["sampleId", "sample_id", "id", "sample_no", "Sample no.", "Sample no"])
+        if sid_col:
+            count = wq[sid_col].dropna().shape[0]
+            kpis["water_sources"] = str(count) if count > 0 else "—"
+        else:
+            kpis["water_sources"] = str(len(wq))
+
+    return kpis
+
+
+def _build_surveillance_radar(d):
+    oh_sum = d.get("onehealth_summary", pd.DataFrame())
+
+    EXPECTED_CATEGORIES = [
+        "Water Quality", "Soil Health", "Air Quality",
+        "Animal Health", "Human NCD", "Vector Disease", "AMR Risk",
+    ]
+
+    cat_col   = find_col(oh_sum, ["category"])
+    score_col = find_col(oh_sum, ["score"])
+
+    current_scores = {}
+    if cat_col and score_col and not oh_sum.empty:
+        oh_num = coerce_numeric(oh_sum, [score_col])
+        for _, row in oh_num.iterrows():
+            cat = str(row[cat_col]).strip()
+            val = row[score_col]
+            if pd.notna(val):
+                current_scores[cat] = float(val)
+
+    categories = EXPECTED_CATEGORIES
+    current_vals = [current_scores.get(c, 0) for c in categories]
+    target_val   = 80
+
+    cats_closed    = categories + [categories[0]]
+    current_closed = current_vals + [current_vals[0]]
+    target_closed  = [target_val] * (len(categories) + 1)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatterpolar(
+        r=current_closed,
+        theta=cats_closed,
+        name="Current",
+        fill="toself",
+        line=dict(color=C_BLUE, width=2.5, dash="solid"),
+        fillcolor=rgba(C_BLUE, 0.10),
+        hovertemplate="<b>%{theta}</b><br>Score: %{r}<extra></extra>",
+    ))
+
+    fig.add_trace(go.Scatterpolar(
+        r=target_closed,
+        theta=cats_closed,
+        name="Target (80)",
+        fill="none",
+        line=dict(color=C_GREEN, width=2, dash="dash"),
+        hovertemplate="<b>Target</b>: %{r}<extra></extra>",
+    ))
+
+    fig.update_layout(
+        **PLna("One Health Surveillance Radar"),
+        polar=dict(
+            bgcolor="#ffffff",
+            radialaxis=dict(
+                range=[0, 100],
+                gridcolor="rgba(0,0,0,0.08)",
+                tickfont_color=MUTED,
+                tickfont_size=9,
+                linecolor=BORDER,
+            ),
+            angularaxis=dict(
+                gridcolor="rgba(0,0,0,0.08)",
+                tickfont_color=TEXT,
+                linecolor=BORDER,
+            ),
+        ),
+    )
+    return fig
+
+
+RISK_LEVEL_MAP = {
+    "low":       30,
+    "moderate":  60,
+    "high":      85,
+    "very high": 95,
+    "detected":  90,
+}
+
+
+def _build_risk_indicators(d):
+    oh_risk = d.get("onehealth_risk", pd.DataFrame())
+
+    ind_col  = find_col(oh_risk, ["indicator"])
+    lvl_col  = find_col(oh_risk, ["level"])
+    desc_col = find_col(oh_risk, ["description"])
+
+    fig = empty_fig("No risk indicator data available")
+
+    if ind_col and lvl_col and not oh_risk.empty:
+        rows = oh_risk[[ind_col, lvl_col] + ([desc_col] if desc_col else [])].copy()
+        rows = rows.dropna(subset=[ind_col, lvl_col])
+
+        if not rows.empty:
+            rows["_numeric"] = rows[lvl_col].astype(str).str.strip().str.lower().map(
+                lambda x: RISK_LEVEL_MAP.get(x, None)
+            )
+            for i, row in rows.iterrows():
+                if pd.isna(rows.at[i, "_numeric"]):
+                    v = pd.to_numeric(row[lvl_col], errors="coerce")
+                    if pd.notna(v):
+                        rows.at[i, "_numeric"] = float(v)
+
+            rows = rows.dropna(subset=["_numeric"])
+            rows["_numeric"] = rows["_numeric"].astype(float)
+
+            if not rows.empty:
+                rows = rows.sort_values("_numeric", ascending=True)
+
+                def _bar_color(level_str):
+                    lv = str(level_str).strip().lower()
+                    if lv == "low":
+                        return C_GREEN
+                    elif lv == "moderate":
+                        return C_AMBER
+                    else:
+                        return C_RED
+
+                bar_colors = [_bar_color(lv) for lv in rows[lvl_col]]
+
+                hover_text = []
+                for _, row in rows.iterrows():
+                    desc = str(row.get(desc_col, "")).strip() if desc_col else ""
+                    desc = desc if desc and desc.lower() != "nan" else ""
+                    hover_text.append(
+                        f"<b>{row[ind_col]}</b><br>Level: {row[lvl_col]}<br>{desc}<extra></extra>"
+                        if desc else
+                        f"<b>{row[ind_col]}</b><br>Level: {row[lvl_col]}<extra></extra>"
+                    )
+
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=rows["_numeric"],
+                    y=rows[ind_col].astype(str),
+                    orientation="h",
+                    marker_color=bar_colors,
+                    marker_line_width=0,
+                    hovertemplate=hover_text,
+                    text=rows[lvl_col].astype(str),
+                    textposition="inside",
+                    textfont=dict(color="#ffffff", size=10, family="'DM Mono',monospace"),
+                ))
+
+                fig.add_vline(
+                    x=80, line_dash="dot", line_color=C_RED, line_width=1.5,
+                    annotation_text="High risk threshold",
+                    annotation_font=dict(color=C_RED, size=10),
+                )
+
+                layout_props = PL("Key Risk Indicators")
+                layout_props.pop("xaxis", None)
+                fig.update_layout(**layout_props)
+                fig.update_xaxes(
+                    range=[0, 100],
+                    title_text="Risk Score",
+                    gridcolor="rgba(0,0,0,0.08)",
+                    linecolor=BORDER,
+                    tickfont_color=MUTED,
+                    title_font_color=MUTED,
+                    zerolinecolor=BORDER,
+                )
+
+    return fig
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -536,86 +880,19 @@ def empty_fig(msg="No data available"):
 
 
 def page_overview(d):
-    rm   = d.get("riskMatrix",       pd.DataFrame())
-    proj = d.get("projectedOutcome", pd.DataFrame())
-    cp   = d.get("crossPillarIndex", pd.DataFrame())
-    oh_kpi = d.get("onehealth_kpi",  pd.DataFrame())
     oh_sum = d.get("onehealth_summary", pd.DataFrame())
 
-    overview_kpis = {
-        "Village Population":    kpi_val(oh_kpi, ["Village Population", "Population"],       "5,500"),
-        "PHC Services":          kpi_val(oh_kpi, ["PHC Services", "PHC Service"],             "8"),
-        "Stray Dogs in ABC":     kpi_val(oh_kpi, ["Stray Dogs in ABC", "ABC Program", "ABC"], "550"),
-        "Water Sources Tested":  kpi_val(oh_kpi, ["Water Sources Tested"],                    "10"),
-        "Top Risk Score":        kpi_val(oh_kpi, ["Top Risk Score", "Top Risk"],               "95"),
-    }
+    # ── Overview KPIs — fully dynamic ────────────────────────────────────
+    kpis = _get_overview_kpis(d)
 
-    # ── Radar — multi-factor risk ─────────────────────────────────────────
-    factor_col = find_col(rm, ["factor"])
-    radar_cols = [
-        (find_col(rm, ["likelihood"]), C_BLUE, "Likelihood"),
-        (find_col(rm, ["impact"]),     C_RED,  "Impact"),
-        (find_col(rm, ["urgency"]),    C_AMBER, "Urgency"),
-    ]
-    fig_risk = empty_fig("No risk matrix data available")
-    if factor_col and any(col for col, _, _ in radar_cols):
-        rm_plot = coerce_numeric(rm, [col for col, _, _ in radar_cols if col])
-        rm_plot = rm_plot[rm_plot[factor_col].notna()].copy()
-        fig_risk = go.Figure()
-        for col, color, name in radar_cols:
-            if not col:
-                continue
-            valid = rm_plot[[factor_col, col]].dropna()
-            if valid.empty:
-                continue
-            vals = valid[col].tolist() + [valid[col].iloc[0]]
-            cats = valid[factor_col].astype(str).tolist() + [str(valid[factor_col].iloc[0])]
-            fig_risk.add_trace(go.Scatterpolar(
-                r=vals, theta=cats, name=name, fill="toself",
-                line=dict(color=color, width=2), fillcolor=rgba(color, 0.08),
-            ))
-        if not fig_risk.data:
-            fig_risk = empty_fig("No risk matrix data available")
-    fig_risk.update_layout(
-        **PLna("Multi-Factor Risk Radar"),
-        polar=dict(
-            bgcolor="#ffffff",
-            radialaxis=dict(range=[0, 100], gridcolor="rgba(0,0,0,0.08)",
-                            tickfont_color=MUTED, tickfont_size=9, linecolor=BORDER),
-            angularaxis=dict(gridcolor="rgba(0,0,0,0.08)", tickfont_color=TEXT, linecolor=BORDER),
-        ),
-    )
+    # ── Graph 1: One Health Surveillance Radar ────────────────────────────
+    fig_risk = _build_surveillance_radar(d)
 
-    # ── Projected outcome ─────────────────────────────────────────────────
-    year_col = find_col(proj, ["year"])
-    proj_cols = [
-        (find_col(proj, ["noIntervention", "baseline"]),           C_RED,   "dot",   "No Intervention"),
-        (find_col(proj, ["partial", "partialOneHealth"]),          C_AMBER, "dash",  "Partial One Health"),
-        (find_col(proj, ["fullOneHealth", "full"]),                C_GREEN, "solid", "Full One Health"),
-    ]
-    fig_proj = empty_fig("No projected outcome data available")
-    if year_col and any(col for col, _, _, _ in proj_cols):
-        proj_plot = coerce_numeric(proj, [year_col] + [col for col, _, _, _ in proj_cols if col])
-        fig_proj = go.Figure()
-        for col, color, dash, name in proj_cols:
-            if not col:
-                continue
-            valid = proj_plot[[year_col, col]].dropna()
-            if valid.empty:
-                continue
-            fig_proj.add_trace(go.Scatter(
-                x=valid[year_col], y=valid[col], name=name, mode="lines+markers",
-                line=dict(color=color, width=2.5, dash=dash),
-                marker=dict(size=7, color=color),
-                fill="tozeroy" if name == "Full One Health" else "none",
-                fillcolor=rgba(C_GREEN, 0.06),
-            ))
-        if not fig_proj.data:
-            fig_proj = empty_fig("No projected outcome data available")
-    fig_proj.update_layout(**PL("Projected Disease Burden 2025–2030",
-                                 yaxis_title="Burden Index", xaxis_title="Year"))
+    # ── Graph 2: Key Risk Indicators ─────────────────────────────────────
+    fig_proj = _build_risk_indicators(d)
 
     # ── Cross-pillar risk ─────────────────────────────────────────────────
+    cp = d.get("crossPillarIndex", pd.DataFrame())
     cp_factor_col = find_col(cp, ["factor", "category"])
     cp_value_col  = find_col(cp, ["value", "score"])
     fig_cross = empty_fig("No cross-pillar risk data available")
@@ -636,7 +913,6 @@ def page_overview(d):
     fig_cross.update_layout(**PL("Cross-Pillar Risk Index", xaxis_title="Risk Score"))
 
     # ── Key findings from onehealth_summary sheet ─────────────────────────
-    # Sheet expected columns: insight_text, color_key (blue/red/amber/green)
     summary_insights = []
     sum_text_col  = find_col(oh_sum, ["insight_text", "insight", "finding", "text", "summary"])
     sum_color_col = find_col(oh_sum, ["color_key", "color", "pillar", "category"])
@@ -651,7 +927,6 @@ def page_overview(d):
             color = color_lookup.get(c_key, C_BLUE)
             summary_insights.append(insight_row(txt, color))
 
-    # Fallback static insights if sheet is empty
     if not summary_insights:
         summary_insights = [
             insight_row("Water contamination is the top urgency risk (95/100). Household effluent TDS at 1,420 ppm — 3× the safe limit.", C_BLUE),
@@ -672,13 +947,18 @@ def page_overview(d):
                 pillar_chip("🌿 Environment",   C_RED),
             ]
         ),
+
+        # ── KPI cards — all dynamically fetched ──────────────────────────
         html.Div([
-            kpi_card("Village Population",   overview_kpis["Village Population"],   "",          "Bettahalasuru, Karnataka",  "blue"),
-            kpi_card("PHC Services",         overview_kpis["PHC Services"],         "programs",  "Screening + treatment",     "green"),
-            kpi_card("Stray Dogs in ABC",    overview_kpis["Stray Dogs in ABC"],    "animals",   "Mar 2024 programme",        "amber"),
-            kpi_card("Water Sources Tested", overview_kpis["Water Sources Tested"], "locations", "Village + lake combined",   "red"),
-            kpi_card("Top Risk Score",       overview_kpis["Top Risk Score"],       "urgency",   "Water contamination",       "red"),
-        ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
+            kpi_card("Households",        kpis["households"],    "",          "Bettahalasuru, Karnataka",   "blue"),
+            kpi_card("Livestock",         kpis["livestock"],     "animals",   "Via Vet Department",         "green"),
+            kpi_card("Stray Dogs",        kpis["stray_dogs"],    "",          "Village population",         "amber"),
+            kpi_card("ABC Programme",     kpis["abc_count"],     "animals",   "Neutered + anti-rabies",     "red"),
+            kpi_card("Avian Species",     kpis["avian"],         "species",   "Observed in area",           "purple"),
+            kpi_card("AQI",               kpis["aqi"],           "",          "Avg — air quality index",    "amber"),
+            kpi_card("Humidity",          kpis["humidity"],      "%",         "Ambient avg reading",        "blue"),
+            kpi_card("Water Sources",     kpis["water_sources"], "tested",    "Village + lake combined",    "red"),
+        ], style={"display": "grid", "gridTemplateColumns": "repeat(8,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
         grid2([
             chart_card(dcc.Graph(figure=fig_risk, config={"displayModeBar": False}), "blue"),
@@ -710,15 +990,26 @@ def page_human(d):
     kpi = d.get("kpi_data",             pd.DataFrame())
     di  = d.get("disease_insights",     pd.DataFrame())
 
-    # ── Human KPI values from sheet ───────────────────────────────────────
-    h_population     = kpi_val(kpi, ["Total Population", "Population", "Village Population"], "3,573")
-    h_phc_services   = kpi_val(kpi, ["PHC Services", "PHC Programs", "Services"],             "8+")
-    h_hypertension   = kpi_val(kpi, ["Hypertension", "Hypertension Cases", "BP Cases"],       "—")
-    h_dengue_peak    = kpi_val(kpi, ["Dengue Peak", "Dengue", "Dengue Cases"],                "—")
-    h_malaria_range  = kpi_val(kpi, ["Malaria Range", "Malaria Cases", "Malaria"],            "—")
+    # ── Human KPI values — wide format ───────────────────────────────────
+    h_population   = kpi_val_from_wide(kpi, ["totalPopulation", "total_population", "Total Population", "Population"], "3,573")
+    h_phc_services = kpi_val_from_wide(kpi, ["phcServices", "PHC Services", "phcservices"], "8+")
+    h_hypertension = kpi_val_from_wide(kpi, ["hypertension", "Hypertension", "hypertensionCases", "bpCases"], "—")
+    h_dengue_peak  = kpi_val_from_wide(kpi, ["denguePeak", "dengue", "dengueCases", "Dengue"], "—")
+    h_malaria_range= kpi_val_from_wide(kpi, ["malariaRange", "malaria", "malariaCases", "Malaria"], "—")
+
+    # ── Fallback to old lookup if wide returns default ────────────────────
+    if h_population == "3,573":
+        h_population = kpi_val(kpi, ["Total Population", "Population", "Village Population"], "3,573")
+    if h_phc_services == "8+":
+        h_phc_services = kpi_val(kpi, ["PHC Services", "PHC Programs", "Services"], "8+")
+    if h_hypertension == "—":
+        h_hypertension = kpi_val(kpi, ["Hypertension", "Hypertension Cases", "BP Cases"], "—")
+    if h_dengue_peak == "—":
+        h_dengue_peak = kpi_val(kpi, ["Dengue Peak", "Dengue", "Dengue Cases"], "—")
+    if h_malaria_range == "—":
+        h_malaria_range = kpi_val(kpi, ["Malaria Range", "Malaria Cases", "Malaria"], "—")
 
     # ── Vector highlight values from vectorInsights sheet ─────────────────
-    # Expected columns in vectorInsights: disease, casesRange, insight
     vi_disease_col = find_col(vi, ["disease"])
     vi_cases_col   = find_col(vi, ["casesRange", "cases_range", "cases", "caseRange"])
     vi_insight_col = find_col(vi, ["insight", "description", "note"])
@@ -741,7 +1032,6 @@ def page_human(d):
                                        "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)")
 
     # ── Disease burden progress bars from diseaseBurden sheet ────────────
-    # Expected columns: diseaseCategory, value, sublabel (optional)
     db_cat_col = find_col(db, ["diseaseCategory", "disease_category", "disease", "category"])
     db_val_col = find_col(db, ["value", "score", "severity"])
     db_sub_col = find_col(db, ["sublabel", "sub_label", "description", "note"])
@@ -842,7 +1132,6 @@ def page_human(d):
             kpi_card("Malaria Range",     h_malaria_range, "cases/yr",  "Monsoon driven",             "purple"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
-        # Vector highlight cards — values from vectorInsights sheet
         html.Div([
             html.Div([
                 html.Div(style={"height": "3px", "background": C_BLUE, "borderRadius": "0 0 0 0", "margin": "-14px -16px 12px"}),
@@ -876,7 +1165,6 @@ def page_human(d):
         ]),
 
         grid2([
-            # Disease burden — dynamic progress bars from diseaseBurden sheet
             html.Div([
                 card_top_bar(C_BLUE),
                 html.Div(style={"height": "6px"}),
@@ -890,7 +1178,6 @@ def page_human(d):
                 progress_bar("Leptospirosis",            db_lep_sub,  db_lep_pct,  "green"),
             ], style=CARD_STYLE),
 
-            # Screening programs table
             html.Div([
                 card_top_bar(C_PURPLE),
                 html.Div(style={"height": "6px"}),
@@ -911,7 +1198,6 @@ def page_human(d):
             ], style=CARD_STYLE),
         ]),
 
-        # Disease insights from sheet
         html.Div(disease_insight_rows) if disease_insight_rows else html.Div([
             insight_row(
                 f"{r.get('disease','')}: {r.get('casesRange','')} cases — {r.get('insight','')}",
@@ -930,16 +1216,28 @@ def page_animal(d):
     akpi = d.get("animal_kpi_data",  pd.DataFrame())
     abl  = d.get("antibioticLevels", pd.DataFrame())
 
-    # ── Animal KPI values from sheet ──────────────────────────────────────
-    a_stray_dogs      = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs"],             "—")
-    a_abc_count       = kpi_val(akpi, ["ABC Count", "ABC Program", "ABC", "Neutered"],             "—")
-    a_rabies_rate     = kpi_val(akpi, ["Rabies Rate", "Rabies Reduction", "Rabies Infection Rate"],"—")
-    a_livestock       = kpi_val(akpi, ["Livestock", "Livestock Monitored", "Animals Monitored"],   "—")
-    a_amr_status      = kpi_val(akpi, ["AMR Status", "AMR Overall", "Antibiotic Status"],          "Safe")
+    # ── Animal KPI values — wide format after pivot ───────────────────────
+    a_stray_dogs  = kpi_val_from_wide(akpi, ["strayDogs", "stray_dogs", "stray dogs"], "—")
+    a_abc_count   = kpi_val_from_wide(akpi, ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "abcCount"], "—")
+    a_rabies_rate = kpi_val_from_wide(akpi, ["rabiesInfectionRate", "rabiesRate", "rabies_rate", "rabiesInfRate", "rabiesInf"], "—")
+    a_livestock   = kpi_val_from_wide(akpi, ["livestockMonitored", "livestock_monitored", "livestock"], "—")
+    a_amr_status  = kpi_val_from_wide(akpi, ["amrStatus", "AMR Status", "amrOverall", "antibioticStatus"], "Safe")
 
-    # ── Stray dog gauge value from sheet ─────────────────────────────────
-    gauge_val = 550  # fallback
-    gauge_raw = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs", "ABC Gauge"], None)
+    # Fallback to old row-based lookup
+    if a_stray_dogs == "—":
+        a_stray_dogs = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs"], "—")
+    if a_abc_count == "—":
+        a_abc_count = kpi_val(akpi, ["ABC Count", "ABC Program", "ABC", "Neutered"], "—")
+    if a_rabies_rate == "—":
+        a_rabies_rate = kpi_val(akpi, ["Rabies Rate", "Rabies Reduction", "Rabies Infection Rate"], "—")
+    if a_livestock == "—":
+        a_livestock = kpi_val(akpi, ["Livestock", "Livestock Monitored", "Animals Monitored"], "—")
+
+    # ── Stray dog gauge value ─────────────────────────────────────────────
+    gauge_val = 550
+    gauge_raw = kpi_val_from_wide(akpi, ["strayDogs", "stray_dogs"], None)
+    if gauge_raw is None:
+        gauge_raw = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs", "ABC Gauge"], None)
     if gauge_raw is not None:
         try:
             gauge_val = float(str(gauge_raw).replace(",", ""))
@@ -947,7 +1245,6 @@ def page_animal(d):
             gauge_val = 550
 
     # ── ABC program insight values from sheet ─────────────────────────────
-    # Expected columns in animalInsights: metric, value (or insight text column)
     ai_insight_col = find_col(ai, ["insight", "insight_text", "finding", "text", "description"])
     ai_metric_col  = find_col(ai, ["metric", "name", "category"])
     ai_value_col   = find_col(ai, ["value", "data_value", "pct"])
@@ -964,7 +1261,6 @@ def page_animal(d):
     non_neutered_infection_rate = get_ai_metric("non.neutered infection", "9%")
 
     # ── ABC program table from abcProgram sheet ───────────────────────────
-    # Expected columns: date, activity, count
     abc_date_col     = find_col(abc, ["date"])
     abc_activity_col = find_col(abc, ["activity"])
     abc_count_col    = find_col(abc, ["count", "value"])
@@ -980,7 +1276,6 @@ def page_animal(d):
                 (cnt_badge,                                  1),
             ])
 
-    # Fallback static ABC table
     abc_table_rows = abc_table_rows_dynamic if abc_table_rows_dynamic else [
         [("05-Mar-2024", 1.5), ("Dogs picked up from Bettahalasuru village",             3), (badge("17", "info"), 1)],
         [("06-Mar-2024", 1.5), ("Neutering completed + anti-rabies vaccination",         3), (badge("17", "good"), 1)],
@@ -988,8 +1283,7 @@ def page_animal(d):
         [("11-Mar-2024", 1.5), ("Released at original pickup location",                  3), (badge("17", "good"), 1)],
     ]
 
-    # ── AMR table from amrFindings or antibioticLevels sheet ─────────────
-    # Expected columns: antibiotic, sampleType, levelFound, permissible, status
+    # ── AMR table from amrFindings sheet ─────────────────────────────────
     amr_ant_col    = find_col(amr, ["antibiotic"])
     amr_sample_col = find_col(amr, ["sampleType", "sample_type", "sample"])
     amr_level_col  = find_col(amr, ["levelFound", "level_found", "level"])
@@ -1063,10 +1357,11 @@ def page_animal(d):
         if not fig_abc.data:
             fig_abc = empty_fig("No ABC programme data available")
     abc_pl = {k: v for k, v in PL("ABC Programme — Bettahalasuru").items() if k != "xaxis"}
-    fig_abc.update_layout(**abc_pl, xaxis=dict(
+    fig_abc.update_layout(**abc_pl)
+    fig_abc.update_xaxes(
         gridcolor="rgba(0,0,0,0.08)", linecolor=BORDER,
         tickfont_color=MUTED, title_text="Animals",
-    ))
+    )
 
     # ── AMR residue chart ─────────────────────────────────────────────────
     amr_antibiotic_col_c = find_col(amr, ["antibiotic"])
@@ -1092,7 +1387,7 @@ def page_animal(d):
             ))
     fig_amr.update_layout(**PL("AMR Residue vs Permissible Limits", yaxis_title="Concentration (mg/L)"))
 
-    # ── Stray dogs gauge — value from sheet ───────────────────────────────
+    # ── Stray dogs gauge ──────────────────────────────────────────────────
     fig_g = go.Figure(go.Indicator(
         mode="gauge+number", value=gauge_val,
         title={"text": "Stray Dogs in Programme", "font": {"color": C_AMBER, "size": 13}},
@@ -1204,8 +1499,8 @@ def page_environment(d):
     pv  = d.get("physiochem_village_waterquality", pd.DataFrame())
 
     # ── AQI from air_quality sheet ────────────────────────────────────────
-    aqi_val      = 135   # fallback
-    humidity_val = "—"   # fallback
+    aqi_val      = 135
+    humidity_val = "—"
     aq_param_col = find_col(aq, ["parameter", "param", "metric"])
     aq_value_col = find_col(aq, ["value", "reading", "measurement"])
     if aq_param_col and aq_value_col and not aq.empty:
@@ -1222,7 +1517,6 @@ def page_environment(d):
                     humidity_val = fmt_num(parsed)
 
     # ── Gram staining metrics from gram_staining_total sheet ─────────────
-    # Expected columns: metric, value  (or similar)
     gt_metric_col = find_col(gt, ["metric", "parameter", "name", "category"])
     gt_value_col  = find_col(gt, ["value", "count", "percent", "pct"])
 
@@ -1246,7 +1540,6 @@ def page_environment(d):
     wq_source_col_e  = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
     wq_tds_col_e     = find_col(wq, ["TDS_ppm", "TDS", "tds"])
     if wq_source_col_e and wq_tds_col_e and not wq.empty:
-        # Find the row whose source contains "effluent" or "household"
         mask = wq[wq_source_col_e].astype(str).str.lower().str.contains("effluent|household", na=False)
         if mask.any():
             tds_raw = pd.to_numeric(wq.loc[mask, wq_tds_col_e].iloc[0], errors="coerce")
@@ -1331,7 +1624,7 @@ def page_environment(d):
             ))
     fig_soil.update_layout(**PL("Soil CFU by Site", yaxis_title="CFU/mL"))
 
-    # ── Gram staining pie — uses dynamic total ────────────────────────────
+    # ── Gram staining pie ─────────────────────────────────────────────────
     fig_gr = empty_fig("No gram staining data available")
     if gt_metric_col and gt_value_col and not gt.empty:
         gram_neg_display = gram_neg_pct
@@ -1344,7 +1637,6 @@ def page_environment(d):
             textfont_color=TEXT,
         ))
     elif not gt.empty:
-        # fallback: try reading raw gram negative percent column directly
         gt_neg_col = find_col(gt, ["gram_negative_percent", "gram_neg_pct"])
         if gt_neg_col:
             g = gt.iloc[0]
@@ -1360,7 +1652,7 @@ def page_environment(d):
                 ))
     fig_gr.update_layout(**PLna(f"Gram Staining — {total_isolates} Isolates"))
 
-    # ── AQI gauge — value from sheet ─────────────────────────────────────
+    # ── AQI gauge ─────────────────────────────────────────────────────────
     fig_aqi = go.Figure(go.Indicator(
         mode="gauge+number", value=float(aqi_val),
         title={"text": "Air Quality Index (AQI)", "font": {"color": C_AMBER, "size": 13}},
@@ -1380,7 +1672,7 @@ def page_environment(d):
     ))
     fig_aqi.update_layout(**PLgauge(), height=250, margin=dict(l=24, r=24, t=44, b=16))
 
-    # ── Water quality table — fully dynamic from water_quality sheet ──────
+    # ── Water quality table ───────────────────────────────────────────────
     wq_id_col     = find_col(wq, ["sample_id", "sampleId", "id", "sample_no", "Sample no.", "Sample no"])
     wq_label_col  = find_col(wq, ["source_name", "sourceName", "source", "location", "label", "Label"])
     wq_ph_col     = find_col(wq, ["pH", "ph"])
@@ -1428,7 +1720,6 @@ def page_environment(d):
                 (badge(status, bkind), 1),
             ])
 
-    # Static fallback water quality table
     wq_table_rows_fallback = [
         [("S1",  0.5), ("Effluent Household",    2), ("7.52", 0.6), ("1990", 0.8), ("1420", 0.8), ("1.8",  0.6), ("10.46", 0.8), (badge("Unfit",       "bad"),  1)],
         [("S2",  0.5), ("Borewell (Closed Tank)",2), ("7.42", 0.6), ("1549", 0.8), ("1120", 0.8), ("6.55", 0.6), ("7.12",  0.8), (badge("Treat First",  "warn"), 1)],
@@ -1458,7 +1749,6 @@ def page_environment(d):
     return html.Div([
         section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY"),
 
-        # KPI cards — all dynamic
         grid4([
             kpi_card("AQI Level",         fmt_num(aqi_val),    "",    "Unhealthy for sensitive groups", "amber"),
             kpi_card("Humidity",          humidity_val,         "%",   "Respiratory risk assessment",    "blue"),
@@ -1471,7 +1761,6 @@ def page_environment(d):
             chart_card(dcc.Graph(figure=fig_gr, config={"displayModeBar": False}), "red"),
         ]),
 
-        # Full water quality table — dynamic
         html.Div([
             card_top_bar(C_BLUE),
             html.Div(style={"height": "6px"}),
@@ -1514,7 +1803,6 @@ def page_environment(d):
                        style={"fontSize": "11px", "color": MUTED}),
             ], style=CARD_STYLE),
 
-            # Gram staining summary — all values dynamic
             html.Div([
                 card_top_bar(C_GREEN),
                 html.Div(style={"height": "6px"}),
@@ -1595,8 +1883,7 @@ def page_interconnections(d):
             if pd.notna(tds_raw):
                 effluent_tds = f"{int(tds_raw):,}"
 
-    # ── Interconnection KPI values from riskMatrix and interactionStrength ─
-    # Top risk urgency
+    # ── Interconnection KPI values ────────────────────────────────────────
     top_risk_urgency  = "—"
     rm_factor_col_k   = find_col(rm, ["factor"])
     rm_urgency_col_k  = find_col(rm, ["urgency"])
@@ -1605,7 +1892,6 @@ def page_interconnections(d):
         if not rm_u.empty:
             top_risk_urgency = fmt_num(rm_u[rm_urgency_col_k].max())
 
-    # Rainfall correlation label
     rainfall_corr = "—"
     rd_rain_col_k = find_col(rd, ["rainfallIndex", "rainfall_index", "rainfall"])
     rd_dengue_col = find_col(rd, ["dengueCases", "dengue"])
@@ -1616,7 +1902,6 @@ def page_interconnections(d):
             if pd.notna(corr):
                 rainfall_corr = f"{corr:.2f}"
 
-    # Leptospirosis environmental route % from zoonoticTransmission
     lepto_env_pct = "—"
     zoo_path_col  = find_col(zoo, ["pathway"])
     zoo_env_col   = find_col(zoo, ["environmental"])
@@ -1627,7 +1912,6 @@ def page_interconnections(d):
             if pd.notna(val):
                 lepto_env_pct = fmt_num(val)
 
-    # ABC+Vaccination effectiveness — reduction from rabies projection
     abc_vacc_eff = "—"
     rp2 = d.get("rabiesProjection", pd.DataFrame())
     rp_year_col2  = find_col(rp2, ["year"])
@@ -1642,7 +1926,6 @@ def page_interconnections(d):
             if no_abc > 0:
                 abc_vacc_eff = fmt_num(round((1 - with_vacc / no_abc) * 100))
 
-    # Full OH 2030 burden reduction from projectedOutcome
     oh_reduction = "—"
     proj3 = d.get("projectedOutcome", pd.DataFrame())
     proj_year3 = find_col(proj3, ["year"])
@@ -1878,12 +2161,8 @@ TAB_CFG = [
     ("interconnections", "⟳  Interconnectedness"),
 ]
 
-# ── Initial header values (refreshed dynamically via callback) ───────────
+# ── Initial header values ─────────────────────────────────────────────────
 _INIT_AQI, _INIT_POP = _extract_header_values(DATA)
-if _INIT_AQI == "—":
-    _INIT_AQI = "—"
-if _INIT_POP == "—":
-    _INIT_POP = "—"
 
 
 app.layout = html.Div([
@@ -1923,6 +2202,7 @@ app.layout = html.Div([
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
             }),
+            # ── CHANGED: "Households" → "Population", reads totalPopulation ──
             html.Div(id="header-population", children=[
                 "Population ", html.Span(_INIT_POP, style={"color": C_BLUE, "fontWeight": "600"}),
             ], style={
@@ -2028,6 +2308,7 @@ def refresh_data(n_intervals, n_clicks):
     ts = datetime.now().strftime("%d %b %Y %H:%M:%S")
     aqi_str, pop_str = _extract_header_values(DATA)
     aqi_content = ["AQI ", html.Span(aqi_str, style={"color": C_AMBER, "fontWeight": "600"})]
+    # ── CHANGED: label updated to "Population" ──
     pop_content  = ["Population ", html.Span(pop_str, style={"color": C_BLUE, "fontWeight": "600"})]
     return ts, f"Updated: {ts}", aqi_content, pop_content
 
