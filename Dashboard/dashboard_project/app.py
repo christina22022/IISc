@@ -208,10 +208,9 @@ def load_all():
 DATA = load_all()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NEW DESIGN SYSTEM — from OneHealth_Dashboard2.html
+# DESIGN SYSTEM
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Core palette (light, clean, professional)
 C_BLUE   = "#0284c7"
 C_GREEN  = "#16a34a"
 C_RED    = "#dc2626"
@@ -225,7 +224,7 @@ BORDER   = "rgba(0,0,0,0.1)"
 TEXT     = "#0f172a"
 MUTED    = "#1e293b"
 
-# Plotly theme helper — crisp light background
+
 def PL(title="", **kw):
     base = dict(
         paper_bgcolor="#ffffff",
@@ -274,6 +273,7 @@ CARD_STYLE = {
     "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
     "transition": "transform 0.2s, box-shadow 0.2s",
 }
+
 
 def card_top_bar(color):
     return html.Div(style={
@@ -421,13 +421,14 @@ def progress_bar(label, sub_label, pct, color="blue"):
         "purple": "linear-gradient(90deg,#7e22ce,#6b21a8)",
         "amber":  "linear-gradient(90deg,#b45309,#92400e)",
     }
+    pct_clamped = max(0, min(100, float(pct) if pct is not None else 0))
     return html.Div([
         html.Div([
             html.Span(label, style={"color": TEXT, "fontWeight": "600", "fontSize": "12px"}),
             html.Span(sub_label, style={"color": MUTED, "fontFamily": "'DM Mono',monospace", "fontSize": "11px"}),
         ], style={"display": "flex", "justifyContent": "space-between", "marginBottom": "5px"}),
         html.Div(
-            html.Div(style={"width": f"{pct}%", "height": "100%", "borderRadius": "4px",
+            html.Div(style={"width": f"{pct_clamped}%", "height": "100%", "borderRadius": "4px",
                             "background": color_map.get(color, color_map["blue"]), "transition": "width 1s ease"}),
             style={"height": "6px", "background": "rgba(0,0,0,0.08)", "borderRadius": "4px", "overflow": "hidden"}
         ),
@@ -435,7 +436,6 @@ def progress_bar(label, sub_label, pct, color="blue"):
 
 
 def data_table_wrap(header_cols, rows):
-    """header_cols: list of (label, flex), rows: list of list of (content, flex)"""
     header = html.Div([
         html.Div(c, style={
             "flex": str(f), "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
@@ -478,6 +478,47 @@ def insight_row(text, color):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# HELPER: extract a named metric from kpi-style sheets
+# ══════════════════════════════════════════════════════════════════════════════
+
+def kpi_val(df, labels, default="—"):
+    """Look up a value in a KPI/metric sheet by metric name."""
+    return lookup_kpi_value(df, labels, default)
+
+
+def fmt_num(val, default="—"):
+    """Format a numeric value cleanly; return default if invalid."""
+    try:
+        v = float(val)
+        if v == int(v):
+            return str(int(v))
+        return f"{v:,.2f}"
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_header_values(data):
+    """Return (aqi_str, population_str) from freshly loaded data."""
+    aqi_str = "—"
+    aq = data.get("air_quality", pd.DataFrame())
+    aq_param_col = find_col(aq, ["parameter", "param", "metric"])
+    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
+    if aq_param_col and aq_value_col and not aq.empty:
+        for _, aq_row in aq.iterrows():
+            if str(aq_row[aq_param_col]).strip().upper() == "AQI":
+                v = pd.to_numeric(aq_row[aq_value_col], errors="coerce")
+                if pd.notna(v):
+                    aqi_str = str(int(round(v)))
+                break
+
+    pop_str = lookup_kpi_value(
+        data.get("onehealth_kpi", pd.DataFrame()),
+        ["Village Population", "Population"], "—"
+    )
+    return aqi_str, pop_str
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PAGE RENDERERS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -495,25 +536,26 @@ def empty_fig(msg="No data available"):
 
 
 def page_overview(d):
-    rm = d.get("riskMatrix", pd.DataFrame())
+    rm   = d.get("riskMatrix",       pd.DataFrame())
     proj = d.get("projectedOutcome", pd.DataFrame())
-    cp = d.get("crossPillarIndex", pd.DataFrame())
-    oh_kpi = d.get("onehealth_kpi", pd.DataFrame())
+    cp   = d.get("crossPillarIndex", pd.DataFrame())
+    oh_kpi = d.get("onehealth_kpi",  pd.DataFrame())
+    oh_sum = d.get("onehealth_summary", pd.DataFrame())
 
     overview_kpis = {
-        "Village Population": lookup_kpi_value(oh_kpi, ["Village Population", "Population"], "5,500"),
-        "PHC Services": lookup_kpi_value(oh_kpi, ["PHC Services", "PHC Service"], "8"),
-        "Stray Dogs in ABC": lookup_kpi_value(oh_kpi, ["Stray Dogs in ABC", "ABC Program", "ABC"], "550"),
-        "Water Sources Tested": lookup_kpi_value(oh_kpi, ["Water Sources Tested"], "10"),
-        "Top Risk Score": lookup_kpi_value(oh_kpi, ["Top Risk Score", "Top Risk"], "95"),
+        "Village Population":    kpi_val(oh_kpi, ["Village Population", "Population"],       "5,500"),
+        "PHC Services":          kpi_val(oh_kpi, ["PHC Services", "PHC Service"],             "8"),
+        "Stray Dogs in ABC":     kpi_val(oh_kpi, ["Stray Dogs in ABC", "ABC Program", "ABC"], "550"),
+        "Water Sources Tested":  kpi_val(oh_kpi, ["Water Sources Tested"],                    "10"),
+        "Top Risk Score":        kpi_val(oh_kpi, ["Top Risk Score", "Top Risk"],               "95"),
     }
 
-    # Radar — multi-factor risk
+    # ── Radar — multi-factor risk ─────────────────────────────────────────
     factor_col = find_col(rm, ["factor"])
     radar_cols = [
         (find_col(rm, ["likelihood"]), C_BLUE, "Likelihood"),
-        (find_col(rm, ["impact"]), C_RED, "Impact"),
-        (find_col(rm, ["urgency"]), C_AMBER, "Urgency"),
+        (find_col(rm, ["impact"]),     C_RED,  "Impact"),
+        (find_col(rm, ["urgency"]),    C_AMBER, "Urgency"),
     ]
     fig_risk = empty_fig("No risk matrix data available")
     if factor_col and any(col for col, _, _ in radar_cols):
@@ -544,12 +586,12 @@ def page_overview(d):
         ),
     )
 
-    # Projected outcome
+    # ── Projected outcome ─────────────────────────────────────────────────
     year_col = find_col(proj, ["year"])
     proj_cols = [
-        (find_col(proj, ["noIntervention", "baseline"]), C_RED, "dot", "No Intervention"),
-        (find_col(proj, ["partial", "partialOneHealth"]), C_AMBER, "dash", "Partial One Health"),
-        (find_col(proj, ["fullOneHealth", "full"]), C_GREEN, "solid", "Full One Health"),
+        (find_col(proj, ["noIntervention", "baseline"]),           C_RED,   "dot",   "No Intervention"),
+        (find_col(proj, ["partial", "partialOneHealth"]),          C_AMBER, "dash",  "Partial One Health"),
+        (find_col(proj, ["fullOneHealth", "full"]),                C_GREEN, "solid", "Full One Health"),
     ]
     fig_proj = empty_fig("No projected outcome data available")
     if year_col and any(col for col, _, _, _ in proj_cols):
@@ -573,9 +615,9 @@ def page_overview(d):
     fig_proj.update_layout(**PL("Projected Disease Burden 2025–2030",
                                  yaxis_title="Burden Index", xaxis_title="Year"))
 
-    # Cross-pillar risk
+    # ── Cross-pillar risk ─────────────────────────────────────────────────
     cp_factor_col = find_col(cp, ["factor", "category"])
-    cp_value_col = find_col(cp, ["value", "score"])
+    cp_value_col  = find_col(cp, ["value", "score"])
     fig_cross = empty_fig("No cross-pillar risk data available")
     if cp_factor_col and cp_value_col:
         cp_plot = coerce_numeric(cp, [cp_value_col]).dropna(subset=[cp_factor_col, cp_value_col]).copy()
@@ -593,6 +635,31 @@ def page_overview(d):
                                 annotation_font=dict(color=C_RED, size=10))
     fig_cross.update_layout(**PL("Cross-Pillar Risk Index", xaxis_title="Risk Score"))
 
+    # ── Key findings from onehealth_summary sheet ─────────────────────────
+    # Sheet expected columns: insight_text, color_key (blue/red/amber/green)
+    summary_insights = []
+    sum_text_col  = find_col(oh_sum, ["insight_text", "insight", "finding", "text", "summary"])
+    sum_color_col = find_col(oh_sum, ["color_key", "color", "pillar", "category"])
+    color_lookup  = {"blue": C_BLUE, "red": C_RED, "amber": C_AMBER, "green": C_GREEN,
+                     "human": C_BLUE, "animal": C_AMBER, "environment": C_RED, "overview": C_GREEN}
+    if sum_text_col and not oh_sum.empty:
+        for _, row in oh_sum.iterrows():
+            txt = str(row.get(sum_text_col, "")).strip()
+            if not txt or txt.lower() in ("nan", ""):
+                continue
+            c_key = str(row.get(sum_color_col, "blue")).strip().lower() if sum_color_col else "blue"
+            color = color_lookup.get(c_key, C_BLUE)
+            summary_insights.append(insight_row(txt, color))
+
+    # Fallback static insights if sheet is empty
+    if not summary_insights:
+        summary_insights = [
+            insight_row("Water contamination is the top urgency risk (95/100). Household effluent TDS at 1,420 ppm — 3× the safe limit.", C_BLUE),
+            insight_row("Dengue spiked to 60 cases in 2022 following high rainfall (index 95). Rainfall strongly predicts vector disease burden.", C_RED),
+            insight_row("ABC + Vaccination is the only scenario that prevents exponential rabies spread. ABC alone slows but cannot stop it.", C_AMBER),
+            insight_row("Full One Health intervention could reduce disease burden 80% by 2030 vs doing nothing.", C_GREEN),
+        ]
+
     return html.Div([
         hero_box(
             "One Health Dashboard",
@@ -600,18 +667,17 @@ def page_overview(d):
             "environment at the village interface — built on the One Health framework by Planetary Health "
             "Foundation, an initiative of Equine Biotech, IISc.",
             chips=[
-                pillar_chip("👤 Human Health",   C_BLUE),
-                pillar_chip("🐾 Animal Health",  C_GREEN),
-                pillar_chip("🌿 Environment",    C_RED),
+                pillar_chip("👤 Human Health",  C_BLUE),
+                pillar_chip("🐾 Animal Health", C_GREEN),
+                pillar_chip("🌿 Environment",   C_RED),
             ]
         ),
-        # 5 KPI cards
         html.Div([
-            kpi_card("Village Population",   overview_kpis["Village Population"],   "",          "Bettahalasuru, Karnataka",    "blue"),
-            kpi_card("PHC Services",         overview_kpis["PHC Services"],         "programs",  "Screening + treatment",       "green"),
-            kpi_card("Stray Dogs in ABC",    overview_kpis["Stray Dogs in ABC"],    "animals",   "Mar 2024 programme",          "amber"),
-            kpi_card("Water Sources Tested", overview_kpis["Water Sources Tested"], "locations", "Village + lake combined",     "red"),
-            kpi_card("Top Risk Score",       overview_kpis["Top Risk Score"],       "urgency",   "Water contamination",         "red"),
+            kpi_card("Village Population",   overview_kpis["Village Population"],   "",          "Bettahalasuru, Karnataka",  "blue"),
+            kpi_card("PHC Services",         overview_kpis["PHC Services"],         "programs",  "Screening + treatment",     "green"),
+            kpi_card("Stray Dogs in ABC",    overview_kpis["Stray Dogs in ABC"],    "animals",   "Mar 2024 programme",        "amber"),
+            kpi_card("Water Sources Tested", overview_kpis["Water Sources Tested"], "locations", "Village + lake combined",   "red"),
+            kpi_card("Top Risk Score",       overview_kpis["Top Risk Score"],       "urgency",   "Water contamination",       "red"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
         grid2([
@@ -626,10 +692,7 @@ def page_overview(d):
                     "fontFamily": "'DM Mono',monospace", "fontSize": "10px", "fontWeight": "700",
                     "color": MUTED, "letterSpacing": "2px", "textTransform": "uppercase", "margin": "0 0 12px",
                 }),
-                insight_row("Water contamination is the top urgency risk (95/100). Household effluent TDS at 1,420 ppm — 3× the safe limit.", C_BLUE),
-                insight_row("Dengue spiked to 60 cases in 2022 following high rainfall (index 95). Rainfall strongly predicts vector disease burden.", C_RED),
-                insight_row("ABC + Vaccination is the only scenario that prevents exponential rabies spread. ABC alone slows but cannot stop it.", C_AMBER),
-                insight_row("Full One Health intervention could reduce disease burden 80% by 2030 vs doing nothing.", C_GREEN),
+                *summary_insights,
             ], style={**CARD_STYLE, "paddingTop": "16px"}),
         ], style={
             "display": "grid", "gridTemplateColumns": "2fr 1fr",
@@ -639,16 +702,85 @@ def page_overview(d):
 
 
 def page_human(d):
-    md = d.get("majorDiseases",        pd.DataFrame())
-    vt = d.get("vectorDiseaseTrend",   pd.DataFrame())
-    db = d.get("diseaseBurden",        pd.DataFrame())
-    sc = d.get("phcScreeningPrograms", pd.DataFrame())
-    vi = d.get("vectorInsights",       pd.DataFrame())
+    md  = d.get("majorDiseases",        pd.DataFrame())
+    vt  = d.get("vectorDiseaseTrend",   pd.DataFrame())
+    db  = d.get("diseaseBurden",        pd.DataFrame())
+    sc  = d.get("phcScreeningPrograms", pd.DataFrame())
+    vi  = d.get("vectorInsights",       pd.DataFrame())
+    kpi = d.get("kpi_data",             pd.DataFrame())
+    di  = d.get("disease_insights",     pd.DataFrame())
 
-    # Disease case-load bar
-    dis_col = find_col(md, ["disease"])
+    # ── Human KPI values from sheet ───────────────────────────────────────
+    h_population     = kpi_val(kpi, ["Total Population", "Population", "Village Population"], "3,573")
+    h_phc_services   = kpi_val(kpi, ["PHC Services", "PHC Programs", "Services"],             "8+")
+    h_hypertension   = kpi_val(kpi, ["Hypertension", "Hypertension Cases", "BP Cases"],       "—")
+    h_dengue_peak    = kpi_val(kpi, ["Dengue Peak", "Dengue", "Dengue Cases"],                "—")
+    h_malaria_range  = kpi_val(kpi, ["Malaria Range", "Malaria Cases", "Malaria"],            "—")
+
+    # ── Vector highlight values from vectorInsights sheet ─────────────────
+    # Expected columns in vectorInsights: disease, casesRange, insight
+    vi_disease_col = find_col(vi, ["disease"])
+    vi_cases_col   = find_col(vi, ["casesRange", "cases_range", "cases", "caseRange"])
+    vi_insight_col = find_col(vi, ["insight", "description", "note"])
+
+    def get_vi_value(disease_name, col, default):
+        if vi_disease_col and col and not vi.empty:
+            row = vi[vi[vi_disease_col].astype(str).str.strip().str.lower() == disease_name.lower()]
+            if not row.empty:
+                val = str(row[col].iloc[0]).strip()
+                return val if val and val.lower() != "nan" else default
+        return default
+
+    malaria_cases   = get_vi_value("malaria",     vi_cases_col,   "30–50/yr")
+    malaria_insight = get_vi_value("malaria",     vi_insight_col, "Peak during monsoon. RDT used at PHC.")
+    dengue_cases    = get_vi_value("dengue",      vi_cases_col,   "—")
+    dengue_insight  = get_vi_value("dengue",      vi_insight_col, "Spike linked to high rainfall and standing water.")
+    chikungunya_cases   = get_vi_value("chikungunya",   vi_cases_col,   "—")
+    chikungunya_insight = get_vi_value("chikungunya",   vi_insight_col, "Sporadic post-monsoon. Nets distributed.")
+    rainfall_insight    = get_vi_value("rainfall",      vi_insight_col,
+                                       "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)")
+
+    # ── Disease burden progress bars from diseaseBurden sheet ────────────
+    # Expected columns: diseaseCategory, value, sublabel (optional)
+    db_cat_col = find_col(db, ["diseaseCategory", "disease_category", "disease", "category"])
+    db_val_col = find_col(db, ["value", "score", "severity"])
+    db_sub_col = find_col(db, ["sublabel", "sub_label", "description", "note"])
+
+    def get_db(cat_name, default_pct, default_sub):
+        if db_cat_col and db_val_col and not db.empty:
+            row = db[db[db_cat_col].astype(str).str.strip().str.lower().str.contains(cat_name.lower())]
+            if not row.empty:
+                pct = pd.to_numeric(row[db_val_col].iloc[0], errors="coerce")
+                sub = str(row[db_sub_col].iloc[0]).strip() if db_sub_col else default_sub
+                sub = sub if sub and sub.lower() != "nan" else default_sub
+                return (float(pct) if pd.notna(pct) else default_pct), sub
+        return default_pct, default_sub
+
+    db_hyp_pct,  db_hyp_sub  = get_db("hypertension",  72, "Rising (age 40+)")
+    db_diab_pct, db_diab_sub = get_db("diabetes",       65, "Growing — lifestyle factors")
+    db_tb_pct,   db_tb_sub   = get_db("tuberculosis",   45, "Endemic — lower SES groups")
+    db_anm_pct,  db_anm_sub  = get_db("anemia",         55, "Nutritional deficiency")
+    db_mal_pct,  db_mal_sub  = get_db("malaria",         35, "30–50 cases/yr")
+    db_den_pct,  db_den_sub  = get_db("dengue",          48, "Cases — peak season")
+    db_lep_pct,  db_lep_sub  = get_db("leptospirosis",   18, "Monsoon linked")
+
+    # ── Disease insights from disease_insights sheet ──────────────────────
+    di_text_col  = find_col(di, ["insight_text", "insight", "finding", "text"])
+    di_color_col = find_col(di, ["color_key", "color", "pillar"])
+    color_lk     = {"blue": C_BLUE, "red": C_RED, "amber": C_AMBER, "green": C_GREEN}
+    disease_insight_rows = []
+    if di_text_col and not di.empty:
+        for _, row in di.iterrows():
+            txt = str(row.get(di_text_col, "")).strip()
+            if not txt or txt.lower() == "nan":
+                continue
+            c_key = str(row.get(di_color_col, "blue")).strip().lower() if di_color_col else "blue"
+            disease_insight_rows.append(insight_row(txt, color_lk.get(c_key, C_BLUE)))
+
+    # ── Disease case-load bar ─────────────────────────────────────────────
+    dis_col  = find_col(md, ["disease"])
     case_col = find_col(md, ["cases", "value"])
-    fig_dis = empty_fig("No disease case-load data available")
+    fig_dis  = empty_fig("No disease case-load data available")
     if dis_col and case_col:
         md_s = coerce_numeric(md, [case_col]).dropna(subset=[dis_col, case_col]).sort_values(case_col, ascending=True)
         n = len(md_s)
@@ -662,9 +794,9 @@ def page_human(d):
             ))
     fig_dis.update_layout(**PL("Major Diseases at PHC (2020–2024)", xaxis_title="Cases Reported"))
 
-    # Vector disease trend
+    # ── Vector disease trend ──────────────────────────────────────────────
     year_col = find_col(vt, ["year"])
-    fig_vec = empty_fig("No vector disease trend data available")
+    fig_vec  = empty_fig("No vector disease trend data available")
     if year_col:
         vt_plot = coerce_numeric(vt, [year_col])
         fig_vec = go.Figure()
@@ -688,31 +820,9 @@ def page_human(d):
             fig_vec = empty_fig("No vector disease trend data available")
     fig_vec.update_layout(**PL("Vector-Borne Disease Trend 2020–2024", yaxis_title="Cases", xaxis_title="Year"))
 
-    # Disease burden severity
-    fig_bur = go.Figure()
-    if not db.empty and all(col in db.columns for col in ["value", "diseaseCategory"]):
-        db_s = db.sort_values("value")
-        bclrs = [C_GREEN if v < 45 else (C_AMBER if v < 65 else C_RED) for v in db_s["value"]]
-        fig_bur.add_trace(go.Bar(
-            x=db_s["value"], y=db_s["diseaseCategory"], orientation="h",
-            marker_color=bclrs, marker_line_width=0,
-        ))
-    fig_bur.update_layout(**PL("Disease Burden Severity Index", xaxis_title="Severity Score"))
-
-    # Screening program pie
-    fig_sc = go.Figure()
-    if not sc.empty and "status" in sc.columns:
-        sc_c = sc["status"].value_counts().reset_index()
-        sc_c.columns = ["status", "count"]
-        fig_sc = px.pie(sc_c, names="status", values="count", hole=0.55,
-                        color_discrete_sequence=[C_BLUE, C_AMBER, C_GREEN],
-                        title="PHC Programs by Status")
-        fig_sc.update_layout(**PLna())
-        fig_sc.update_traces(textfont_color=TEXT)
-
-    # Screening table rows
-    badge_map_bg    = {"Active": "good", "Seasonal": "warn", "Periodic": "info"}
-    screening_rows  = []
+    # ── Screening programs table ──────────────────────────────────────────
+    badge_map_bg   = {"Active": "good", "Seasonal": "warn", "Periodic": "info"}
+    screening_rows = []
     if not sc.empty:
         for _, row in sc.iterrows():
             screening_rows.append([
@@ -724,40 +834,39 @@ def page_human(d):
     return html.Div([
         section_banner("Human Pillar", "PRIMARY HEALTH CENTRE · BETTAHALASURU"),
 
-        # Vector disease highlight row
         html.Div([
-            kpi_card("Total Population",  "3,573",  "",          "Bettahalasuru",            "blue"),
-            kpi_card("PHC Services",      "8+",     "programs",  "Screening programs active","green"),
-            kpi_card("Hypertension Cases","75",      "cases",    "Highest single disease",   "red"),
-            kpi_card("Dengue Peak 2022",  "60",      "cases",    "Spike — stagnant water",   "amber"),
-            kpi_card("Malaria Range",     "30–50",   "cases/yr", "Monsoon driven",           "purple"),
+            kpi_card("Total Population",  h_population,    "",          "Bettahalasuru",              "blue"),
+            kpi_card("PHC Services",      h_phc_services,  "programs",  "Screening programs active",  "green"),
+            kpi_card("Hypertension Cases", h_hypertension,  "cases",    "Highest single disease",     "red"),
+            kpi_card("Dengue Peak",       h_dengue_peak,   "cases",     "Spike — stagnant water",     "amber"),
+            kpi_card("Malaria Range",     h_malaria_range, "cases/yr",  "Monsoon driven",             "purple"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
-        # Vector disease highlight cards
+        # Vector highlight cards — values from vectorInsights sheet
         html.Div([
             html.Div([
                 html.Div(style={"height": "3px", "background": C_BLUE, "borderRadius": "0 0 0 0", "margin": "-14px -16px 12px"}),
                 html.P("🦟 MALARIA", style={"fontFamily": "'DM Mono',monospace", "fontSize": "10px", "color": MUTED, "fontWeight": "700", "margin": "0 0 2px"}),
-                html.P("30–50/yr", style={"fontSize": "20px", "fontWeight": "700", "color": C_BLUE, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
-                html.P("Peak during monsoon. RDT used at PHC.", style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
+                html.P(malaria_cases, style={"fontSize": "20px", "fontWeight": "700", "color": C_BLUE, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
+                html.P(malaria_insight, style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_BLUE}"}),
             html.Div([
                 html.Div(style={"height": "3px", "background": C_RED, "borderRadius": "0", "margin": "-14px -16px 12px"}),
                 html.P("🦟 DENGUE", style={"fontFamily": "'DM Mono',monospace", "fontSize": "10px", "color": MUTED, "fontWeight": "700", "margin": "0 0 2px"}),
-                html.P("60 cases", style={"fontSize": "20px", "fontWeight": "700", "color": C_RED, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
-                html.P("2022 spike — high rainfall, standing water.", style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
+                html.P(dengue_cases, style={"fontSize": "20px", "fontWeight": "700", "color": C_RED, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
+                html.P(dengue_insight, style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_RED}"}),
             html.Div([
                 html.Div(style={"height": "3px", "background": C_PURPLE, "borderRadius": "0", "margin": "-14px -16px 12px"}),
                 html.P("🦟 CHIKUNGUNYA", style={"fontFamily": "'DM Mono',monospace", "fontSize": "10px", "color": MUTED, "fontWeight": "700", "margin": "0 0 2px"}),
-                html.P("10–25/yr", style={"fontSize": "20px", "fontWeight": "700", "color": C_PURPLE, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
-                html.P("Sporadic post-monsoon. Nets distributed.", style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
+                html.P(chikungunya_cases, style={"fontSize": "20px", "fontWeight": "700", "color": C_PURPLE, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
+                html.P(chikungunya_insight, style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_PURPLE}"}),
             html.Div([
                 html.Div(style={"height": "3px", "background": C_AMBER, "borderRadius": "0", "margin": "-14px -16px 12px"}),
                 html.P("🌧 RAINFALL LINK", style={"fontFamily": "'DM Mono',monospace", "fontSize": "10px", "color": MUTED, "fontWeight": "700", "margin": "0 0 2px"}),
                 html.P("High corr.", style={"fontSize": "18px", "fontWeight": "700", "color": C_AMBER, "fontFamily": "'DM Mono',monospace", "margin": "0"}),
-                html.P("↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)", style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
+                html.P(rainfall_insight, style={"fontSize": "10px", "color": MUTED, "margin": "2px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_AMBER}"}),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(4,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
@@ -767,18 +876,18 @@ def page_human(d):
         ]),
 
         grid2([
-            # Disease burden as progress bars
+            # Disease burden — dynamic progress bars from diseaseBurden sheet
             html.Div([
                 card_top_bar(C_BLUE),
                 html.Div(style={"height": "6px"}),
                 card_title("Disease Burden by Category"),
-                progress_bar("Hypertension & CVD",     "Rising (age 40+)",             72, "red"),
-                progress_bar("Diabetes (Type 2)",      "Growing — lifestyle factors",  65, "amber"),
-                progress_bar("Tuberculosis",            "Endemic — lower SES groups",   45, "red"),
-                progress_bar("Anemia (women & children)","Nutritional deficiency",      55, "purple"),
-                progress_bar("Malaria (seasonal)",     "30–50 cases/yr",               35, "blue"),
-                progress_bar("Dengue",                 "60 cases (2022 spike)",         48, "red"),
-                progress_bar("Leptospirosis",          "15 cases (2021)",               18, "green"),
+                progress_bar("Hypertension & CVD",      db_hyp_sub,  db_hyp_pct,  "red"),
+                progress_bar("Diabetes (Type 2)",        db_diab_sub, db_diab_pct, "amber"),
+                progress_bar("Tuberculosis",             db_tb_sub,   db_tb_pct,   "red"),
+                progress_bar("Anemia (women & children)", db_anm_sub, db_anm_pct,  "purple"),
+                progress_bar("Malaria (seasonal)",       db_mal_sub,  db_mal_pct,  "blue"),
+                progress_bar("Dengue",                   db_den_sub,  db_den_pct,  "red"),
+                progress_bar("Leptospirosis",            db_lep_sub,  db_lep_pct,  "green"),
             ], style=CARD_STYLE),
 
             # Screening programs table
@@ -789,45 +898,136 @@ def page_human(d):
                 data_table_wrap(
                     [("Screening Type", 2), ("Frequency", 1), ("Status", 1)],
                     screening_rows if screening_rows else [
-                        (("Blood Pressure Monitoring", 2), ("Weekly", 1), (badge("Active", "good"), 1)),
-                        (("Blood Sugar Testing", 2),       ("Weekly", 1), (badge("Active", "good"), 1)),
-                        (("Antenatal Care", 2),            ("Weekly", 1), (badge("Active", "good"), 1)),
-                        (("TB Sputum / Chest X-Ray", 2),   ("Symptomatic", 1), (badge("Active", "good"), 1)),
-                        (("Malaria & Dengue RDT", 2),      ("Peak seasons", 1), (badge("Seasonal", "warn"), 1)),
-                        (("HIV Testing", 2),               ("On request", 1), (badge("Active", "good"), 1)),
-                        (("Eye & Vision Screening", 2),    ("Health camps", 1), (badge("Periodic", "info"), 1)),
-                        (("Anemia (Hemoglobin)", 2),       ("Weekly", 1), (badge("Active", "good"), 1)),
+                        [("Blood Pressure Monitoring", 2), ("Weekly", 1),       (badge("Active",   "good"), 1)],
+                        [("Blood Sugar Testing",        2), ("Weekly", 1),       (badge("Active",   "good"), 1)],
+                        [("Antenatal Care",             2), ("Weekly", 1),       (badge("Active",   "good"), 1)],
+                        [("TB Sputum / Chest X-Ray",   2), ("Symptomatic", 1),  (badge("Active",   "good"), 1)],
+                        [("Malaria & Dengue RDT",       2), ("Peak seasons", 1), (badge("Seasonal", "warn"), 1)],
+                        [("HIV Testing",                2), ("On request", 1),   (badge("Active",   "good"), 1)],
+                        [("Eye & Vision Screening",     2), ("Health camps", 1), (badge("Periodic", "info"), 1)],
+                        [("Anemia (Hemoglobin)",        2), ("Weekly", 1),       (badge("Active",   "good"), 1)],
                     ]
                 ),
             ], style=CARD_STYLE),
         ]),
 
-        # Vector insights
-        html.Div([
-            insight_card_row
-            for insight_card_row in [
-                insight_row(f"{r.get('disease','')}: {r.get('casesRange','')} cases — {r.get('insight','')}", [C_BLUE, C_RED, C_AMBER][i % 3])
-                for i, (_, r) in enumerate(vi.iterrows())
-            ]
-        ]) if not vi.empty else html.Div(),
+        # Disease insights from sheet
+        html.Div(disease_insight_rows) if disease_insight_rows else html.Div([
+            insight_row(
+                f"{r.get('disease','')}: {r.get('casesRange','')} cases — {r.get('insight','')}",
+                [C_BLUE, C_RED, C_AMBER][i % 3]
+            )
+            for i, (_, r) in enumerate(vi.iterrows())
+        ] if not vi.empty else []),
     ])
 
 
 def page_animal(d):
-    rp  = d.get("rabiesProjection", pd.DataFrame())
-    abc = d.get("abcProgram",       pd.DataFrame())
-    amr = d.get("amrFindings",      pd.DataFrame())
-    ai  = d.get("animalInsights",   pd.DataFrame())
+    rp   = d.get("rabiesProjection", pd.DataFrame())
+    abc  = d.get("abcProgram",       pd.DataFrame())
+    amr  = d.get("amrFindings",      pd.DataFrame())
+    ai   = d.get("animalInsights",   pd.DataFrame())
+    akpi = d.get("animal_kpi_data",  pd.DataFrame())
+    abl  = d.get("antibioticLevels", pd.DataFrame())
 
-    # Rabies projection
+    # ── Animal KPI values from sheet ──────────────────────────────────────
+    a_stray_dogs      = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs"],             "—")
+    a_abc_count       = kpi_val(akpi, ["ABC Count", "ABC Program", "ABC", "Neutered"],             "—")
+    a_rabies_rate     = kpi_val(akpi, ["Rabies Rate", "Rabies Reduction", "Rabies Infection Rate"],"—")
+    a_livestock       = kpi_val(akpi, ["Livestock", "Livestock Monitored", "Animals Monitored"],   "—")
+    a_amr_status      = kpi_val(akpi, ["AMR Status", "AMR Overall", "Antibiotic Status"],          "Safe")
+
+    # ── Stray dog gauge value from sheet ─────────────────────────────────
+    gauge_val = 550  # fallback
+    gauge_raw = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs", "ABC Gauge"], None)
+    if gauge_raw is not None:
+        try:
+            gauge_val = float(str(gauge_raw).replace(",", ""))
+        except ValueError:
+            gauge_val = 550
+
+    # ── ABC program insight values from sheet ─────────────────────────────
+    # Expected columns in animalInsights: metric, value (or insight text column)
+    ai_insight_col = find_col(ai, ["insight", "insight_text", "finding", "text", "description"])
+    ai_metric_col  = find_col(ai, ["metric", "name", "category"])
+    ai_value_col   = find_col(ai, ["value", "data_value", "pct"])
+
+    def get_ai_metric(name, default):
+        if ai_metric_col and ai_value_col and not ai.empty:
+            row = ai[ai[ai_metric_col].astype(str).str.strip().str.lower().str.contains(name.lower())]
+            if not row.empty:
+                val = str(row[ai_value_col].iloc[0]).strip()
+                return val if val and val.lower() != "nan" else default
+        return default
+
+    neutered_infection_rate     = get_ai_metric("neutered infection",    "13%")
+    non_neutered_infection_rate = get_ai_metric("non.neutered infection", "9%")
+
+    # ── ABC program table from abcProgram sheet ───────────────────────────
+    # Expected columns: date, activity, count
+    abc_date_col     = find_col(abc, ["date"])
+    abc_activity_col = find_col(abc, ["activity"])
+    abc_count_col    = find_col(abc, ["count", "value"])
+
+    abc_table_rows_dynamic = []
+    if abc_date_col and abc_activity_col and abc_count_col and not abc.empty:
+        for _, row in abc.iterrows():
+            cnt_val = str(row.get(abc_count_col, "")).strip()
+            cnt_badge = badge(cnt_val, "good") if cnt_val and cnt_val.lower() != "nan" else badge("—", "info")
+            abc_table_rows_dynamic.append([
+                (str(row.get(abc_date_col, "")).strip(),     1.5),
+                (str(row.get(abc_activity_col, "")).strip(), 3),
+                (cnt_badge,                                  1),
+            ])
+
+    # Fallback static ABC table
+    abc_table_rows = abc_table_rows_dynamic if abc_table_rows_dynamic else [
+        [("05-Mar-2024", 1.5), ("Dogs picked up from Bettahalasuru village",             3), (badge("17", "info"), 1)],
+        [("06-Mar-2024", 1.5), ("Neutering completed + anti-rabies vaccination",         3), (badge("17", "good"), 1)],
+        [("07–10-Mar-2024", 1.5), ("Post-operative care + antibiotic shots (4 days)",   3), (badge("All 17", "good"), 1)],
+        [("11-Mar-2024", 1.5), ("Released at original pickup location",                  3), (badge("17", "good"), 1)],
+    ]
+
+    # ── AMR table from amrFindings or antibioticLevels sheet ─────────────
+    # Expected columns: antibiotic, sampleType, levelFound, permissible, status
+    amr_ant_col    = find_col(amr, ["antibiotic"])
+    amr_sample_col = find_col(amr, ["sampleType", "sample_type", "sample"])
+    amr_level_col  = find_col(amr, ["levelFound", "level_found", "level"])
+    amr_perm_col   = find_col(amr, ["permissible", "limit", "permissible_limit"])
+    amr_stat_col   = find_col(amr, ["status", "result"])
+
+    amr_table_rows_dynamic = []
+    if amr_ant_col and amr_sample_col and amr_level_col and not amr.empty:
+        for _, row in amr.iterrows():
+            stat_txt = str(row.get(amr_stat_col, "Safe")).strip() if amr_stat_col else "Safe"
+            stat_txt = stat_txt if stat_txt and stat_txt.lower() != "nan" else "Safe"
+            bkind    = "good" if stat_txt.lower() in ("safe", "clear", "ok") else "warn"
+            perm_val = str(row.get(amr_perm_col, "—")).strip() if amr_perm_col else "—"
+            amr_table_rows_dynamic.append([
+                (str(row.get(amr_ant_col,    "")).strip(), 1.2),
+                (str(row.get(amr_sample_col, "")).strip(), 1.5),
+                (str(row.get(amr_level_col,  "")).strip(), 1.5),
+                (perm_val,                                 1.2),
+                (badge(stat_txt, bkind),                   1),
+            ])
+
+    amr_table_rows = amr_table_rows_dynamic if amr_table_rows_dynamic else [
+        [("Doxycycline", 1.2), ("Pig Excreta",   1.5), ("0.000002 mg/g",  1.5), ("0.02 mg/g", 1.2), (badge("Safe",  "good"), 1)],
+        [("Doxycycline", 1.2), ("Hen Excreta",   1.5), ("0.00348 mg/g",   1.5), ("0.02 mg/g", 1.2), (badge("Safe",  "good"), 1)],
+        [("Amoxicillin", 1.2), ("Feed",          1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
+        [("Amoxicillin", 1.2), ("Excreta",       1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
+        [("Amoxicillin", 1.2), ("Water",         1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
+    ]
+
+    # ── Rabies projection chart ───────────────────────────────────────────
     rp_year_col = find_col(rp, ["year"])
     fig_rab = empty_fig("No rabies projection data available")
     if rp_year_col:
         rp_plot = coerce_numeric(rp, [rp_year_col])
         fig_rab = go.Figure()
         for col, color, dash, name in [
-            (find_col(rp, ["noAbc"]), C_RED, "dot", "No ABC"),
-            (find_col(rp, ["withAbc"]), C_AMBER, "dash", "ABC Only"),
+            (find_col(rp, ["noAbc"]),              C_RED,   "dot",   "No ABC"),
+            (find_col(rp, ["withAbc"]),            C_AMBER, "dash",  "ABC Only"),
             (find_col(rp, ["withAbcVaccination"]), C_GREEN, "solid", "ABC + Vaccination"),
         ]:
             if col:
@@ -847,11 +1047,9 @@ def page_animal(d):
     fig_rab.update_layout(**PL("Rabies Projection — 5-Year Model",
                                 yaxis_title="Infected Animals", xaxis_title="Year"))
 
-    # ABC programme bar
-    abc_activity_col = find_col(abc, ["activity"])
-    abc_count_col = find_col(abc, ["count", "value"])
+    # ── ABC programme activity bar ────────────────────────────────────────
     fig_abc = empty_fig("No ABC programme data available")
-    if abc_activity_col and abc_count_col:
+    if abc_activity_col and abc_count_col and not abc.empty:
         abc_plot = coerce_numeric(abc, [abc_count_col]).dropna(subset=[abc_activity_col, abc_count_col])
         step_cols = [C_RED, C_AMBER, C_AMBER, C_AMBER, C_AMBER, C_AMBER, C_GREEN]
         fig_abc = go.Figure()
@@ -862,39 +1060,41 @@ def page_animal(d):
                 showlegend=False,
                 hovertemplate=f"<b>{row[abc_activity_col]}</b><br>Animals: {row[abc_count_col]}<extra></extra>",
             ))
-    abc_pl = {k: v for k, v in PL("ABC Programme — March 2024 (17 Dogs)").items() if k != "xaxis"}
+        if not fig_abc.data:
+            fig_abc = empty_fig("No ABC programme data available")
+    abc_pl = {k: v for k, v in PL("ABC Programme — Bettahalasuru").items() if k != "xaxis"}
     fig_abc.update_layout(**abc_pl, xaxis=dict(
-        range=[0, 20], gridcolor="rgba(0,0,0,0.08)", linecolor=BORDER,
+        gridcolor="rgba(0,0,0,0.08)", linecolor=BORDER,
         tickfont_color=MUTED, title_text="Animals",
     ))
 
-    # AMR residue chart
-    amr_antibiotic_col = find_col(amr, ["antibiotic"])
-    amr_sample_col = find_col(amr, ["sampleType", "sample_type"])
-    amr_level_col = find_col(amr, ["levelFound", "level_found"])
-    amr_limit_col = find_col(amr, ["permissible", "limit"])
+    # ── AMR residue chart ─────────────────────────────────────────────────
+    amr_antibiotic_col_c = find_col(amr, ["antibiotic"])
+    amr_sample_col_c     = find_col(amr, ["sampleType", "sample_type", "sample"])
+    amr_level_col_c      = find_col(amr, ["levelFound", "level_found", "level"])
+    amr_limit_col_c      = find_col(amr, ["permissible", "limit"])
     fig_amr = empty_fig("No AMR findings data available")
-    if amr_antibiotic_col and amr_sample_col and amr_level_col and amr_limit_col:
-        amr_v = coerce_numeric(amr, [amr_level_col, amr_limit_col])
-        amr_v = amr_v.dropna(subset=[amr_antibiotic_col, amr_sample_col, amr_level_col, amr_limit_col]).copy()
+    if amr_antibiotic_col_c and amr_sample_col_c and amr_level_col_c and amr_limit_col_c:
+        amr_v = coerce_numeric(amr, [amr_level_col_c, amr_limit_col_c])
+        amr_v = amr_v.dropna(subset=[amr_antibiotic_col_c, amr_sample_col_c, amr_level_col_c, amr_limit_col_c]).copy()
         if not amr_v.empty:
             fig_amr = go.Figure()
             fig_amr.add_trace(go.Bar(
-                x=amr_v[amr_antibiotic_col].astype(str) + " / " + amr_v[amr_sample_col].astype(str),
-                y=amr_v[amr_level_col], name="Level Found", marker_color=C_BLUE,
+                x=amr_v[amr_antibiotic_col_c].astype(str) + " / " + amr_v[amr_sample_col_c].astype(str),
+                y=amr_v[amr_level_col_c], name="Level Found", marker_color=C_BLUE,
                 marker_line_width=0,
             ))
             fig_amr.add_trace(go.Scatter(
-                x=amr_v[amr_antibiotic_col].astype(str) + " / " + amr_v[amr_sample_col].astype(str),
-                y=amr_v[amr_limit_col], name="Permissible Limit", mode="markers",
+                x=amr_v[amr_antibiotic_col_c].astype(str) + " / " + amr_v[amr_sample_col_c].astype(str),
+                y=amr_v[amr_limit_col_c], name="Permissible Limit", mode="markers",
                 marker=dict(color=C_RED, size=14, symbol="line-ew",
                             line=dict(width=3, color=C_RED)),
             ))
     fig_amr.update_layout(**PL("AMR Residue vs Permissible Limits", yaxis_title="Concentration (mg/L)"))
 
-    # Gauge — stray dogs
+    # ── Stray dogs gauge — value from sheet ───────────────────────────────
     fig_g = go.Figure(go.Indicator(
-        mode="gauge+number", value=550,
+        mode="gauge+number", value=gauge_val,
         title={"text": "Stray Dogs in Programme", "font": {"color": C_AMBER, "size": 13}},
         number={"font": {"color": C_AMBER, "size": 42}},
         gauge=dict(
@@ -912,23 +1112,23 @@ def page_animal(d):
     ))
     fig_g.update_layout(**PLgauge(), height=250, margin=dict(l=24, r=24, t=44, b=16))
 
-    # ABC program static table
-    abc_table_rows = [
-        [("05-Mar-2024", 1.5), ("Dogs picked up from Bettahalasuru village", 3), (badge("17", "info"), 1)],
-        [("06-Mar-2024", 1.5), ("Neutering completed + anti-rabies vaccination", 3), (badge("17", "good"), 1)],
-        [("07–10-Mar-2024", 1.5), ("Post-operative care + antibiotic shots (4 days)", 3), (badge("All 17", "good"), 1)],
-        [("11-Mar-2024", 1.5), ("Released at original pickup location", 3), (badge("17", "good"), 1)],
-    ]
+    # ── Animal insight rows from sheet ────────────────────────────────────
+    animal_insight_rows = []
+    if ai_insight_col and not ai.empty:
+        for i, (_, row) in enumerate(ai.iterrows()):
+            txt = str(row.get(ai_insight_col, "")).strip()
+            if txt and txt.lower() != "nan":
+                animal_insight_rows.append(insight_row(txt, [C_RED, C_AMBER, C_GREEN][i % 3]))
 
     return html.Div([
         section_banner("Animal Pillar", "STRAY DOG MANAGEMENT · LIVESTOCK AMR · POULTRY & PIGGERY · BETTAHALASURU"),
 
         html.Div([
-            kpi_card("Stray Dogs",          "73+",    "",           "Village population",          "blue"),
-            kpi_card("ABC Mar-2024",         "17+",    "animals",    "Neutered + anti-rabies shots","green"),
-            kpi_card("Rabies Rate",          "↓13",   "%",          "Post-ABC cohort",             "red"),
-            kpi_card("Livestock Monitored",  "700–1k", "animals",    "Via Vet Department",          "amber"),
-            kpi_card("AMR Status",           "Safe",   "",           "Within permissible limits",   "green"),
+            kpi_card("Stray Dogs",         a_stray_dogs,  "",          "Village population",          "blue"),
+            kpi_card("ABC Programme",      a_abc_count,   "animals",   "Neutered + anti-rabies shots","green"),
+            kpi_card("Rabies Rate",        a_rabies_rate, "%",         "Post-ABC cohort",             "red"),
+            kpi_card("Livestock",          a_livestock,   "animals",   "Via Vet Department",          "amber"),
+            kpi_card("AMR Status",         a_amr_status,  "",          "Within permissible limits",   "green"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
         grid2([
@@ -937,11 +1137,10 @@ def page_animal(d):
         ]),
 
         grid2([
-            # ABC detail table
             html.Div([
                 card_top_bar(C_BLUE),
                 html.Div(style={"height": "6px"}),
-                card_title("Stray Dog ABC — Bettahalasuru (March 2024)"),
+                card_title("Stray Dog ABC — Bettahalasuru"),
                 data_table_wrap(
                     [("Date", 1.5), ("Activity", 3), ("Count", 1)],
                     abc_table_rows,
@@ -954,16 +1153,15 @@ def page_animal(d):
                     html.P([
                         "Neutralization significantly reduces population growth, but rabies vaccination must accompany ABC programs. "
                         "Neutered populations show a ",
-                        html.Strong("13%", style={"color": C_RED}),
+                        html.Strong(neutered_infection_rate, style={"color": C_RED}),
                         " infection rate vs ",
-                        html.Strong("9%", style={"color": C_GREEN}),
+                        html.Strong(non_neutered_infection_rate, style={"color": C_GREEN}),
                         " in non-neutered — requiring a combined population control + vaccination strategy.",
                     ], style={"fontSize": "12px", "color": MUTED, "lineHeight": "1.7"}),
                 ], style={"padding": "12px", "background": rgba(C_BLUE, 0.04), "borderRadius": "8px",
                           "borderLeft": f"3px solid {C_BLUE}"}),
             ], style=CARD_STYLE),
 
-            # AMR chart
             chart_card(
                 html.Div([
                     card_title("Livestock AMR Findings vs Permissible Limits"),
@@ -974,20 +1172,13 @@ def page_animal(d):
 
         grid2([
             chart_card(dcc.Graph(figure=fig_g, config={"displayModeBar": False}), "amber"),
-            # AMR static table
             html.Div([
                 card_top_bar(C_RED),
                 html.Div(style={"height": "6px"}),
                 card_title("Livestock AMR — Detailed Findings"),
                 data_table_wrap(
                     [("Antibiotic", 1.2), ("Sample Type", 1.5), ("Level Found", 1.5), ("Permissible", 1.2), ("Status", 1)],
-                    [
-                        [("Doxycycline", 1.2), ("Pig Excreta", 1.5), ("0.000002 mg/g", 1.5), ("0.02 mg/g", 1.2), (badge("Safe", "good"), 1)],
-                        [("Doxycycline", 1.2), ("Hen Excreta", 1.5), ("0.00348 mg/g", 1.5), ("0.02 mg/g", 1.2), (badge("Safe", "good"), 1)],
-                        [("Amoxicillin", 1.2), ("Feed", 1.5),        ("None detected", 1.5), ("—", 1.2),         (badge("Clear", "good"), 1)],
-                        [("Amoxicillin", 1.2), ("Excreta", 1.5),     ("None detected", 1.5), ("—", 1.2),         (badge("Clear", "good"), 1)],
-                        [("Amoxicillin", 1.2), ("Water", 1.5),       ("None detected", 1.5), ("—", 1.2),         (badge("Clear", "good"), 1)],
-                    ]
+                    amr_table_rows,
                 ),
                 html.Div(
                     "Detection method: HPLC analysis. Current antibiotic levels pose no immediate AMR risk, but ongoing monitoring is essential.",
@@ -997,29 +1188,77 @@ def page_animal(d):
             ], style=CARD_STYLE),
         ]),
 
-        html.Div([
-            insight_row(row.get("insight", ""), [C_RED, C_AMBER, C_GREEN][i % 3])
-            for i, (_, row) in enumerate(ai.iterrows())
-        ]) if not ai.empty else html.Div(),
+        html.Div(animal_insight_rows) if animal_insight_rows else html.Div(),
     ])
 
 
 def page_environment(d):
-    wq  = d.get("water_quality",    pd.DataFrame())
-    vc  = d.get("villagewatercfu",  pd.DataFrame())
-    lc  = d.get("lake_water_cfu",   pd.DataFrame())
+    wq  = d.get("water_quality",       pd.DataFrame())
+    vc  = d.get("villagewatercfu",     pd.DataFrame())
+    lc  = d.get("lake_water_cfu",      pd.DataFrame())
     gt  = d.get("gram_staining_total", pd.DataFrame())
-    mc  = d.get("microbial_analysis", pd.DataFrame())
-    aq  = d.get("air_quality",      pd.DataFrame())
-    sc  = d.get("soil_cfu",         pd.DataFrame())
+    gsd = d.get("gram_staining_data",  pd.DataFrame())
+    mc  = d.get("microbial_analysis",  pd.DataFrame())
+    aq  = d.get("air_quality",         pd.DataFrame())
+    sc  = d.get("soil_cfu",            pd.DataFrame())
     pv  = d.get("physiochem_village_waterquality", pd.DataFrame())
 
-    # Water quality scatter
-    wq_tds_col = find_col(wq, ["TDS_ppm", "TDS"])
-    wq_do_col = find_col(wq, ["DO_mg_L", "DO"])
-    wq_status_col = find_col(wq, ["drinking_status", "drinkingStatus"])
+    # ── AQI from air_quality sheet ────────────────────────────────────────
+    aqi_val      = 135   # fallback
+    humidity_val = "—"   # fallback
+    aq_param_col = find_col(aq, ["parameter", "param", "metric"])
+    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
+    if aq_param_col and aq_value_col and not aq.empty:
+        for _, aq_row in aq.iterrows():
+            p = str(aq_row[aq_param_col]).strip().upper()
+            v = aq_row[aq_value_col]
+            if p == "AQI":
+                parsed = pd.to_numeric(v, errors="coerce")
+                if pd.notna(parsed):
+                    aqi_val = parsed
+            elif p in ("HUMIDITY", "RH", "RELATIVE HUMIDITY"):
+                parsed = pd.to_numeric(v, errors="coerce")
+                if pd.notna(parsed):
+                    humidity_val = fmt_num(parsed)
+
+    # ── Gram staining metrics from gram_staining_total sheet ─────────────
+    # Expected columns: metric, value  (or similar)
+    gt_metric_col = find_col(gt, ["metric", "parameter", "name", "category"])
+    gt_value_col  = find_col(gt, ["value", "count", "percent", "pct"])
+
+    def get_gt(name, default):
+        if gt_metric_col and gt_value_col and not gt.empty:
+            row = gt[gt[gt_metric_col].astype(str).str.strip().str.lower().str.contains(name.lower())]
+            if not row.empty:
+                val = pd.to_numeric(row[gt_value_col].iloc[0], errors="coerce")
+                return float(val) if pd.notna(val) else default
+        return default
+
+    total_isolates   = int(get_gt("total isolate",   45))
+    gram_neg_pct     = get_gt("gram negative pct",  100.0)
+    bacillus_pct     = get_gt("bacillus",             65.0)
+    cocci_pct        = get_gt("cocci",                35.0)
+    mucoid_pct       = get_gt("mucoid",               30.0)
+    gram_neg_count   = int(get_gt("gram negative count", round(total_isolates * gram_neg_pct / 100)))
+
+    # ── Effluent TDS from water_quality sheet ─────────────────────────────
+    effluent_tds = "—"
+    wq_source_col_e  = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
+    wq_tds_col_e     = find_col(wq, ["TDS_ppm", "TDS", "tds"])
+    if wq_source_col_e and wq_tds_col_e and not wq.empty:
+        # Find the row whose source contains "effluent" or "household"
+        mask = wq[wq_source_col_e].astype(str).str.lower().str.contains("effluent|household", na=False)
+        if mask.any():
+            tds_raw = pd.to_numeric(wq.loc[mask, wq_tds_col_e].iloc[0], errors="coerce")
+            if pd.notna(tds_raw):
+                effluent_tds = f"{int(tds_raw):,}"
+
+    # ── Water quality scatter ─────────────────────────────────────────────
+    wq_tds_col       = find_col(wq, ["TDS_ppm", "TDS"])
+    wq_do_col        = find_col(wq, ["DO_mg_L", "DO"])
+    wq_status_col    = find_col(wq, ["drinking_status", "drinkingStatus"])
     wq_turbidity_col = find_col(wq, ["turbidity_NTU", "turbidity"])
-    wq_source_col = find_col(wq, ["source_name", "sourceName", "source", "location"])
+    wq_source_col    = find_col(wq, ["source_name", "sourceName", "source", "location"])
     fig_wq = empty_fig("No water quality data available")
     if all([wq_tds_col, wq_do_col, wq_status_col, wq_turbidity_col, wq_source_col]):
         wq_plot = coerce_numeric(wq, [wq_tds_col, wq_do_col, wq_turbidity_col])
@@ -1041,9 +1280,9 @@ def page_environment(d):
             fig_wq.update_layout(**PL())
     fig_wq.update_layout(**PL("Water Quality — TDS vs Dissolved Oxygen"))
 
-    # Village water CFU
+    # ── Village water CFU ─────────────────────────────────────────────────
     vc_source_col = find_col(vc, ["source", "source_name", "sourceName", "sample", "location"])
-    vc_mean_col = find_col(vc, ["mean_cfu", "CFU_avg", "CFU avg"])
+    vc_mean_col   = find_col(vc, ["mean_cfu", "CFU_avg", "CFU avg"])
     fig_vc = empty_fig("No village water CFU data available")
     if vc_source_col and vc_mean_col:
         vc_s = coerce_numeric(vc, [vc_mean_col]).dropna(subset=[vc_source_col, vc_mean_col]).sort_values(vc_mean_col)
@@ -1058,9 +1297,9 @@ def page_environment(d):
             ))
     fig_vc.update_layout(**PL("Village Water — Mean CFU/mL", xaxis_title="CFU/mL"))
 
-    # Lake water CFU
+    # ── Lake water CFU ────────────────────────────────────────────────────
     lc_sample_col = find_col(lc, ["sample", "location", "source"])
-    lc_mean_col = find_col(lc, ["mean_cfu", "CFU_avg", "CFU avg"])
+    lc_mean_col   = find_col(lc, ["mean_cfu", "CFU_avg", "CFU avg"])
     fig_lc = empty_fig("No lake water CFU data available")
     if lc_sample_col and lc_mean_col:
         lc_s = coerce_numeric(lc, [lc_mean_col]).dropna(subset=[lc_sample_col, lc_mean_col]).sort_values(lc_mean_col, ascending=False)
@@ -1076,9 +1315,9 @@ def page_environment(d):
     fig_lc.update_layout(**PL("Lake Entry Points — Mean CFU/mL", yaxis_title="CFU/mL"))
     fig_lc.update_xaxes(tickangle=-25)
 
-    # Soil CFU
+    # ── Soil CFU ──────────────────────────────────────────────────────────
     sc_sample_col = find_col(sc, ["sample", "Sample", "site_name", "location"])
-    sc_mean_col = find_col(sc, ["mean_cfu", "CFU avg", "CFU_avg"])
+    sc_mean_col   = find_col(sc, ["mean_cfu", "CFU avg", "CFU_avg"])
     fig_soil = empty_fig("No soil CFU data available")
     if sc_sample_col and sc_mean_col:
         sc_plot = coerce_numeric(sc, [sc_mean_col]).dropna(subset=[sc_sample_col, sc_mean_col]).copy()
@@ -1092,36 +1331,38 @@ def page_environment(d):
             ))
     fig_soil.update_layout(**PL("Soil CFU by Site", yaxis_title="CFU/mL"))
 
-    # Gram staining pie
-    gt_neg_col = find_col(gt, ["gram_negative_percent"])
+    # ── Gram staining pie — uses dynamic total ────────────────────────────
     fig_gr = empty_fig("No gram staining data available")
-    if gt_neg_col:
-        g = gt.iloc[0]
-        val = pd.to_numeric(g[gt_neg_col], errors="coerce")
-        if pd.notna(val):
-            fig_gr = go.Figure()
-            fig_gr.add_trace(go.Pie(
-                labels=["Gram Negative", "Gram Positive"],
-                values=[val, 100 - val],
-                hole=0.58,
-                marker_colors=[C_RED, BORDER],
-                textfont_color=TEXT,
-            ))
-    fig_gr.update_layout(**PLna("Gram Staining — 26 Isolates"))
+    if gt_metric_col and gt_value_col and not gt.empty:
+        gram_neg_display = gram_neg_pct
+        fig_gr = go.Figure()
+        fig_gr.add_trace(go.Pie(
+            labels=["Gram Negative", "Gram Positive"],
+            values=[gram_neg_display, max(0, 100 - gram_neg_display)],
+            hole=0.58,
+            marker_colors=[C_RED, BORDER],
+            textfont_color=TEXT,
+        ))
+    elif not gt.empty:
+        # fallback: try reading raw gram negative percent column directly
+        gt_neg_col = find_col(gt, ["gram_negative_percent", "gram_neg_pct"])
+        if gt_neg_col:
+            g = gt.iloc[0]
+            val = pd.to_numeric(g[gt_neg_col], errors="coerce")
+            if pd.notna(val):
+                fig_gr = go.Figure()
+                fig_gr.add_trace(go.Pie(
+                    labels=["Gram Negative", "Gram Positive"],
+                    values=[val, 100 - val],
+                    hole=0.58,
+                    marker_colors=[C_RED, BORDER],
+                    textfont_color=TEXT,
+                ))
+    fig_gr.update_layout(**PLna(f"Gram Staining — {total_isolates} Isolates"))
 
-    # AQI gauge
-    aqi_val = 135
-    aq_param_col = find_col(aq, ["parameter"])
-    aq_value_col = find_col(aq, ["value"])
-    if aq_param_col and aq_value_col:
-        row = aq[aq[aq_param_col].astype(str).str.strip().str.upper() == "AQI"]
-        if not row.empty:
-            v = pd.to_numeric(row[aq_value_col].iloc[0], errors="coerce")
-            if pd.notna(v):
-                aqi_val = v
-
+    # ── AQI gauge — value from sheet ─────────────────────────────────────
     fig_aqi = go.Figure(go.Indicator(
-        mode="gauge+number", value=aqi_val,
+        mode="gauge+number", value=float(aqi_val),
         title={"text": "Air Quality Index (AQI)", "font": {"color": C_AMBER, "size": 13}},
         number={"font": {"color": C_AMBER, "size": 40}},
         gauge=dict(
@@ -1129,58 +1370,108 @@ def page_environment(d):
             bar=dict(color=C_AMBER, thickness=0.25),
             bgcolor="#ffffff", bordercolor=BORDER,
             steps=[
-                dict(range=[0,   50], color="#d1fae5"),
-                dict(range=[50, 100], color="#ecfccb"),
-                dict(range=[100,150], color="#fef3c7"),
-                dict(range=[150,200], color="#fee2e2"),
+                dict(range=[0,   50],  color="#d1fae5"),
+                dict(range=[50, 100],  color="#ecfccb"),
+                dict(range=[100, 150], color="#fef3c7"),
+                dict(range=[150, 200], color="#fee2e2"),
             ],
             threshold=dict(line=dict(color=C_RED, width=2.5), value=150),
         ),
     ))
     fig_aqi.update_layout(**PLgauge(), height=250, margin=dict(l=24, r=24, t=44, b=16))
 
-    # Water quality summary table
-    wq_table_rows = [
-        [("S1", 0.5), ("Effluent Household", 2), ("7.52", 0.6), ("1990", 0.8), ("1420", 0.8), ("1.8", 0.6), ("10.46", 0.8), (badge("Unfit", "bad"), 1)],
-        [("S2", 0.5), ("Borewell (Closed Tank)", 2), ("7.42", 0.6), ("1549", 0.8), ("1120", 0.8), ("6.55", 0.6), ("7.12", 0.8), (badge("Treat First", "warn"), 1)],
-        [("S3", 0.5), ("Borewell (Open Tank)", 2), ("7.33", 0.6), ("1619", 0.8), ("1150", 0.8), ("6.17", 0.6), ("0.43", 0.8), (badge("Treat First", "warn"), 1)],
-        [("S4", 0.5), ("Effluent (Common Drain)", 2), ("7.35", 0.6), ("1193", 0.8), ("912", 0.8), ("7.89", 0.6), ("3.56", 0.8), (badge("Unfit", "bad"), 1)],
-        [("S5", 0.5), ("Right Lake", 2), ("7.73", 0.6), ("443", 0.8), ("312", 0.8), ("9.48", 0.6), ("2.99", 0.8), (badge("Borderline", "warn"), 1)],
-        [("S6", 0.5), ("Bund Water", 2), ("7.55", 0.6), ("624", 0.8), ("305", 0.8), ("8.62", 0.6), ("1.30", 0.8), (badge("Agriculture", "info"), 1)],
-        [("S7", 0.5), ("Left Lake", 2), ("8.41", 0.6), ("720", 0.8), ("288", 0.8), ("9.26", 0.6), ("2.08", 0.8), (badge("Borderline", "warn"), 1)],
-        [("S8", 0.5), ("Central Lake", 2), ("7.72", 0.6), ("846", 0.8), ("297", 0.8), ("9.13", 0.6), ("1.42", 0.8), (badge("Borderline", "warn"), 1)],
-        [("S9", 0.5), ("Poultry Farm BW", 2), ("6.61", 0.6), ("538", 0.8), ("378", 0.8), ("7.03", 0.6), ("0.32", 0.8), (badge("Treat First", "warn"), 1)],
-        [("S10", 0.5), ("Piggery Water", 2), ("6.25", 0.6), ("112", 0.8), ("204", 0.8), ("8.91", 0.6), ("BDL", 0.8), (badge("Agriculture", "info"), 1)],
-    ]
+    # ── Water quality table — fully dynamic from water_quality sheet ──────
+    wq_id_col     = find_col(wq, ["sample_id", "sampleId", "id", "sample_no", "Sample no.", "Sample no"])
+    wq_label_col  = find_col(wq, ["source_name", "sourceName", "source", "location", "label", "Label"])
+    wq_ph_col     = find_col(wq, ["pH", "ph"])
+    wq_ec_col     = find_col(wq, ["EC_mS", "EC_uS", "EC", "ec"])
+    wq_tds_col2   = find_col(wq, ["TDS_ppm", "TDS", "tds"])
+    wq_do_col2    = find_col(wq, ["DO_mg_L", "DO", "do"])
+    wq_ntu_col    = find_col(wq, ["turbidity_NTU", "turbidity", "NTU", "ntu"])
+    wq_drink_col  = find_col(wq, ["drinking_status", "drinkingStatus", "status", "Status"])
 
-    # Microbial table
+    status_badge_map = {
+        "unfit":       "bad",
+        "treat first": "warn",
+        "borderline":  "warn",
+        "agriculture": "info",
+        "safe":        "good",
+        "potable":     "good",
+    }
+
+    wq_table_rows_dynamic = []
+    if wq_label_col and not wq.empty:
+        for i, (_, row) in enumerate(wq.iterrows()):
+            s_id    = str(row.get(wq_id_col,    f"S{i+1}")).strip() if wq_id_col else f"S{i+1}"
+            label   = str(row.get(wq_label_col, "")).strip()
+            ph_v    = str(round(pd.to_numeric(row.get(wq_ph_col,   "—"), errors="coerce"), 2)) if wq_ph_col else "—"
+            ec_v    = str(round(pd.to_numeric(row.get(wq_ec_col,   "—"), errors="coerce"))) if wq_ec_col else "—"
+            tds_v   = str(round(pd.to_numeric(row.get(wq_tds_col2, "—"), errors="coerce"))) if wq_tds_col2 else "—"
+            do_v    = str(round(pd.to_numeric(row.get(wq_do_col2,  "—"), errors="coerce"), 2)) if wq_do_col2 else "—"
+            ntu_v   = str(round(pd.to_numeric(row.get(wq_ntu_col,  "—"), errors="coerce"), 2)) if wq_ntu_col else "—"
+            status  = str(row.get(wq_drink_col, "—")).strip() if wq_drink_col else "—"
+            bkind   = status_badge_map.get(status.lower(), "info")
+            if "nan" in [ph_v, ec_v, tds_v, do_v]:
+                ph_v  = ph_v  if ph_v  != "nan" else "—"
+                ec_v  = ec_v  if ec_v  != "nan" else "—"
+                tds_v = tds_v if tds_v != "nan" else "—"
+                do_v  = do_v  if do_v  != "nan" else "—"
+            ntu_v = ntu_v if ntu_v != "nan" else "—"
+            wq_table_rows_dynamic.append([
+                (s_id,  0.5),
+                (label, 2),
+                (ph_v,  0.6),
+                (ec_v,  0.8),
+                (tds_v, 0.8),
+                (do_v,  0.6),
+                (ntu_v, 0.8),
+                (badge(status, bkind), 1),
+            ])
+
+    # Static fallback water quality table
+    wq_table_rows_fallback = [
+        [("S1",  0.5), ("Effluent Household",    2), ("7.52", 0.6), ("1990", 0.8), ("1420", 0.8), ("1.8",  0.6), ("10.46", 0.8), (badge("Unfit",       "bad"),  1)],
+        [("S2",  0.5), ("Borewell (Closed Tank)",2), ("7.42", 0.6), ("1549", 0.8), ("1120", 0.8), ("6.55", 0.6), ("7.12",  0.8), (badge("Treat First",  "warn"), 1)],
+        [("S3",  0.5), ("Borewell (Open Tank)",  2), ("7.33", 0.6), ("1619", 0.8), ("1150", 0.8), ("6.17", 0.6), ("0.43",  0.8), (badge("Treat First",  "warn"), 1)],
+        [("S4",  0.5), ("Effluent (Common Drain)",2),("7.35", 0.6), ("1193", 0.8), ("912",  0.8), ("7.89", 0.6), ("3.56",  0.8), (badge("Unfit",        "bad"),  1)],
+        [("S5",  0.5), ("Right Lake",             2), ("7.73", 0.6), ("443",  0.8), ("312",  0.8), ("9.48", 0.6), ("2.99",  0.8), (badge("Borderline",   "warn"), 1)],
+        [("S6",  0.5), ("Bund Water",             2), ("7.55", 0.6), ("624",  0.8), ("305",  0.8), ("8.62", 0.6), ("1.30",  0.8), (badge("Agriculture",  "info"), 1)],
+        [("S7",  0.5), ("Left Lake",              2), ("8.41", 0.6), ("720",  0.8), ("288",  0.8), ("9.26", 0.6), ("2.08",  0.8), (badge("Borderline",   "warn"), 1)],
+        [("S8",  0.5), ("Central Lake",           2), ("7.72", 0.6), ("846",  0.8), ("297",  0.8), ("9.13", 0.6), ("1.42",  0.8), (badge("Borderline",   "warn"), 1)],
+        [("S9",  0.5), ("Poultry Farm BW",        2), ("6.61", 0.6), ("538",  0.8), ("378",  0.8), ("7.03", 0.6), ("0.32",  0.8), (badge("Treat First",  "warn"), 1)],
+        [("S10", 0.5), ("Piggery Water",          2), ("6.25", 0.6), ("112",  0.8), ("204",  0.8), ("8.91", 0.6), ("BDL",   0.8), (badge("Agriculture",  "info"), 1)],
+    ]
+    wq_table_rows = wq_table_rows_dynamic if wq_table_rows_dynamic else wq_table_rows_fallback
+
+    # ── Microbial table ───────────────────────────────────────────────────
     mc_table_rows = []
     if not mc.empty:
         for _, row in mc.iterrows():
             status = row.get("microbial_status", "")
             mc_table_rows.append([
-                (str(row.get("location", "")), 2),
-                (str(row.get("na_plate_count", "")), 1),
-                (str(row.get("emb_indicator", "")), 1.5),
+                (str(row.get("location", "")),        2),
+                (str(row.get("na_plate_count", "")),  1),
+                (str(row.get("emb_indicator", "")),   1.5),
                 (badge(status, "bad" if status == "High" else "warn"), 1),
             ])
 
     return html.Div([
         section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY"),
 
+        # KPI cards — all dynamic
         grid4([
-            kpi_card("AQI Level",          "135",     "",      "Unhealthy for sensitive groups", "amber"),
-            kpi_card("Humidity",           "37",      "%",     "Low — respiratory risk elevated","blue"),
-            kpi_card("Effluent TDS",       "1,420",   "ppm",   "WHO limit: 500 ppm",             "red"),
-            kpi_card("Gram –ve Isolates",  "100",     "%",     "All 26 isolates — water & soil", "purple"),
+            kpi_card("AQI Level",         fmt_num(aqi_val),    "",    "Unhealthy for sensitive groups", "amber"),
+            kpi_card("Humidity",          humidity_val,         "%",   "Respiratory risk assessment",    "blue"),
+            kpi_card("Effluent TDS",      effluent_tds,         "ppm", "WHO limit: 500 ppm",             "red"),
+            kpi_card("Gram –ve Isolates", f"{gram_neg_count}/{total_isolates}", "", f"{total_isolates} isolates tested", "purple"),
         ]),
 
         grid2([
-            chart_card(dcc.Graph(figure=fig_wq,  config={"displayModeBar": False}), "blue"),
-            chart_card(dcc.Graph(figure=fig_gr,  config={"displayModeBar": False}), "red"),
+            chart_card(dcc.Graph(figure=fig_wq, config={"displayModeBar": False}), "blue"),
+            chart_card(dcc.Graph(figure=fig_gr, config={"displayModeBar": False}), "red"),
         ]),
 
-        # Full water quality table
+        # Full water quality table — dynamic
         html.Div([
             card_top_bar(C_BLUE),
             html.Div(style={"height": "6px"}),
@@ -1204,7 +1495,6 @@ def page_environment(d):
         ]),
 
         grid2([
-            # Microbial lake entry table
             html.Div([
                 card_top_bar(C_RED),
                 html.Div(style={"height": "6px"}),
@@ -1213,38 +1503,46 @@ def page_environment(d):
                     [("Location", 2), ("NA Plate", 1), ("EMB Indicator", 1.5), ("Status", 1)],
                     mc_table_rows if mc_table_rows else [
                         [("Lake BH Entry 1", 2), ("Moderate (257 col)", 1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
-                        [("Lake BH Entry 2", 2), ("TNTC", 1),              ("Enterobacter aerogenes", 1.5), (badge("High", "bad"), 1)],
-                        [("Lake BH Entry 3", 2), ("TNTC", 1),              ("Enterobacter aerogenes", 1.5), (badge("High", "bad"), 1)],
-                        [("Lake BH 2", 2),        ("High (380 col)", 1),    ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
-                        [("Lake EF 1", 2),        ("TNTC", 1),              ("High coliform load", 1.5),     (badge("High", "bad"), 1)],
-                        [("Lake BH 3", 2),        ("TNTC / 200", 1),        ("Mixed enteric flora", 1.5),    (badge("High", "bad"), 1)],
+                        [("Lake BH Entry 2", 2), ("TNTC",              1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
+                        [("Lake BH Entry 3", 2), ("TNTC",              1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
+                        [("Lake BH 2",       2), ("High (380 col)",    1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
+                        [("Lake EF 1",       2), ("TNTC",              1), ("High coliform load",     1.5), (badge("High",     "bad"),  1)],
+                        [("Lake BH 3",       2), ("TNTC / 200",        1), ("Mixed enteric flora",    1.5), (badge("High",     "bad"),  1)],
                     ]
                 ),
                 html.P("Media: NA, EMB, XLD | Incubation: 37°C, 24 hrs | Date: 22/01/2026",
                        style={"fontSize": "11px", "color": MUTED}),
             ], style=CARD_STYLE),
 
-            # Gram staining summary
+            # Gram staining summary — all values dynamic
             html.Div([
                 card_top_bar(C_GREEN),
                 html.Div(style={"height": "6px"}),
-                card_title("Gram Staining Summary — 26 Isolates"),
-                progress_bar("Gram Negative (all isolates)", "26/26 = 100%", 100, "red"),
-                progress_bar("Bacillus morphology",           "~65% of isolates", 65, "blue"),
-                progress_bar("Cocci morphology",              "~35% of isolates", 35, "green"),
-                progress_bar("Mucoid layer presence",         "~30% of isolates", 30, "purple"),
+                card_title(f"Gram Staining Summary — {total_isolates} Isolates"),
+                progress_bar("Gram Negative (all isolates)",
+                             f"{gram_neg_count}/{total_isolates} = {gram_neg_pct:.0f}%",
+                             gram_neg_pct, "red"),
+                progress_bar("Bacillus morphology",
+                             f"~{bacillus_pct:.0f}% of isolates",
+                             bacillus_pct, "blue"),
+                progress_bar("Cocci morphology",
+                             f"~{cocci_pct:.0f}% of isolates",
+                             cocci_pct, "green"),
+                progress_bar("Mucoid layer presence",
+                             f"~{mucoid_pct:.0f}% of isolates",
+                             mucoid_pct, "purple"),
                 html.Div([
                     html.P([
-                        "All 26 tested isolates were ",
+                        f"All {gram_neg_count} tested isolates were ",
                         html.Strong("Gram-negative", style={"color": C_RED}),
-                        ". Dominant types: rod-shaped (Bacillus) and spherical (Cocci). Mucoid layers in ~30% suggest capsule-forming, potentially pathogenic organisms.",
+                        f" (out of {total_isolates} total). Dominant types: rod-shaped (Bacillus) and spherical (Cocci). "
+                        f"Mucoid layers in ~{mucoid_pct:.0f}% suggest capsule-forming, potentially pathogenic organisms.",
                     ], style={"fontSize": "12px", "color": MUTED, "lineHeight": "1.6", "margin": "0"}),
                 ], style={"padding": "12px", "background": rgba(C_RED, 0.05), "borderRadius": "8px",
                           "borderLeft": f"3px solid {C_RED}"}),
             ], style=CARD_STYLE),
         ]),
 
-        # Water sample field notes
         html.Div([
             card_top_bar(C_BLUE),
             html.Div(style={"height": "6px"}),
@@ -1267,8 +1565,97 @@ def page_interconnections(d):
     rd   = d.get("rainfallDisease",      pd.DataFrame())
     ints = d.get("interactionStrength",  pd.DataFrame())
     rm   = d.get("riskMatrix",           pd.DataFrame())
+    cp   = d.get("crossPillarIndex",     pd.DataFrame())
+    aq   = d.get("air_quality",          pd.DataFrame())
+    wq   = d.get("water_quality",        pd.DataFrame())
 
-    # Zoonotic transmission stacked
+    aqi_val = "—"
+    humidity_val = "—"
+    effluent_tds = "—"
+
+    aq_param_col = find_col(aq, ["parameter", "param", "metric"])
+    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
+    if aq_param_col and aq_value_col and not aq.empty:
+        for _, aq_row in aq.iterrows():
+            p = str(aq_row[aq_param_col]).strip().upper()
+            v = pd.to_numeric(aq_row[aq_value_col], errors="coerce")
+            if pd.isna(v):
+                continue
+            if p == "AQI":
+                aqi_val = v
+            elif p in ("HUMIDITY", "RH", "RELATIVE HUMIDITY"):
+                humidity_val = fmt_num(v)
+
+    wq_source_col = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
+    wq_tds_col = find_col(wq, ["TDS_ppm", "TDS", "tds"])
+    if wq_source_col and wq_tds_col and not wq.empty:
+        mask = wq[wq_source_col].astype(str).str.lower().str.contains("effluent|household", na=False)
+        if mask.any():
+            tds_raw = pd.to_numeric(wq.loc[mask, wq_tds_col].iloc[0], errors="coerce")
+            if pd.notna(tds_raw):
+                effluent_tds = f"{int(tds_raw):,}"
+
+    # ── Interconnection KPI values from riskMatrix and interactionStrength ─
+    # Top risk urgency
+    top_risk_urgency  = "—"
+    rm_factor_col_k   = find_col(rm, ["factor"])
+    rm_urgency_col_k  = find_col(rm, ["urgency"])
+    if rm_factor_col_k and rm_urgency_col_k and not rm.empty:
+        rm_u = coerce_numeric(rm, [rm_urgency_col_k]).dropna(subset=[rm_urgency_col_k])
+        if not rm_u.empty:
+            top_risk_urgency = fmt_num(rm_u[rm_urgency_col_k].max())
+
+    # Rainfall correlation label
+    rainfall_corr = "—"
+    rd_rain_col_k = find_col(rd, ["rainfallIndex", "rainfall_index", "rainfall"])
+    rd_dengue_col = find_col(rd, ["dengueCases", "dengue"])
+    if rd_rain_col_k and rd_dengue_col and not rd.empty:
+        rd_c = coerce_numeric(rd, [rd_rain_col_k, rd_dengue_col]).dropna(subset=[rd_rain_col_k, rd_dengue_col])
+        if len(rd_c) >= 2:
+            corr = rd_c[rd_rain_col_k].corr(rd_c[rd_dengue_col])
+            if pd.notna(corr):
+                rainfall_corr = f"{corr:.2f}"
+
+    # Leptospirosis environmental route % from zoonoticTransmission
+    lepto_env_pct = "—"
+    zoo_path_col  = find_col(zoo, ["pathway"])
+    zoo_env_col   = find_col(zoo, ["environmental"])
+    if zoo_path_col and zoo_env_col and not zoo.empty:
+        lepto_row = zoo[zoo[zoo_path_col].astype(str).str.lower().str.contains("lepto")]
+        if not lepto_row.empty:
+            val = pd.to_numeric(lepto_row[zoo_env_col].iloc[0], errors="coerce")
+            if pd.notna(val):
+                lepto_env_pct = fmt_num(val)
+
+    # ABC+Vaccination effectiveness — reduction from rabies projection
+    abc_vacc_eff = "—"
+    rp2 = d.get("rabiesProjection", pd.DataFrame())
+    rp_year_col2  = find_col(rp2, ["year"])
+    rp_noabc_col  = find_col(rp2, ["noAbc"])
+    rp_vacc_col   = find_col(rp2, ["withAbcVaccination"])
+    if rp_year_col2 and rp_noabc_col and rp_vacc_col and not rp2.empty:
+        rp2_n = coerce_numeric(rp2, [rp_noabc_col, rp_vacc_col]).dropna(subset=[rp_noabc_col, rp_vacc_col])
+        if not rp2_n.empty:
+            last = rp2_n.iloc[-1]
+            no_abc = last[rp_noabc_col]
+            with_vacc = last[rp_vacc_col]
+            if no_abc > 0:
+                abc_vacc_eff = fmt_num(round((1 - with_vacc / no_abc) * 100))
+
+    # Full OH 2030 burden reduction from projectedOutcome
+    oh_reduction = "—"
+    proj3 = d.get("projectedOutcome", pd.DataFrame())
+    proj_year3 = find_col(proj3, ["year"])
+    proj_no3   = find_col(proj3, ["noIntervention", "baseline"])
+    proj_full3 = find_col(proj3, ["fullOneHealth", "full"])
+    if proj_year3 and proj_no3 and proj_full3 and not proj3.empty:
+        p3 = coerce_numeric(proj3, [proj_no3, proj_full3]).dropna(subset=[proj_no3, proj_full3])
+        if not p3.empty:
+            last3 = p3.iloc[-1]
+            if last3[proj_no3] > 0:
+                oh_reduction = f"−{fmt_num(round((1 - last3[proj_full3] / last3[proj_no3]) * 100))}"
+
+    # ── Zoonotic transmission stacked bar ─────────────────────────────────
     zoo_pathway_col = find_col(zoo, ["pathway"])
     fig_zoo = empty_fig("No zoonotic transmission data available")
     if zoo_pathway_col:
@@ -1280,10 +1667,10 @@ def page_interconnections(d):
         ])
         fig_zoo = go.Figure()
         for col, c, name in [
-            (find_col(zoo, ["directContact"]), C_RED, "Direct Contact"),
+            (find_col(zoo, ["directContact"]), C_RED,   "Direct Contact"),
             (find_col(zoo, ["environmental"]), C_GREEN, "Environmental"),
-            (find_col(zoo, ["foodWater"]), C_AMBER, "Food / Water"),
-            (find_col(zoo, ["vectorMediated"]), C_BLUE, "Vector Mediated"),
+            (find_col(zoo, ["foodWater"]),     C_AMBER, "Food / Water"),
+            (find_col(zoo, ["vectorMediated"]),C_BLUE,  "Vector Mediated"),
         ]:
             if col:
                 valid = zoo_plot[[zoo_pathway_col, col]].dropna()
@@ -1295,7 +1682,7 @@ def page_interconnections(d):
     fig_zoo.update_layout(**PL("Zoonotic Transmission Pathways", barmode="stack", yaxis_title="Transmission %"))
     fig_zoo.update_xaxes(tickangle=-15)
 
-    # Rainfall vs disease
+    # ── Rainfall vs disease ───────────────────────────────────────────────
     rd_rain_col = find_col(rd, ["rainfallIndex"])
     rd_year_col = find_col(rd, ["year"])
     fig_rain = empty_fig("No rainfall-disease data available")
@@ -1303,9 +1690,9 @@ def page_interconnections(d):
         rd_plot = coerce_numeric(rd, [rd_rain_col, rd_year_col] if rd_year_col else [rd_rain_col])
         fig_rain = go.Figure()
         for col, c, name in [
-            (find_col(rd, ["dengueCases"]), C_RED, "Dengue"),
-            (find_col(rd, ["malariaCases"]), C_PURPLE, "Malaria"),
-            (find_col(rd, ["leptospirosis"]), C_GREEN, "Leptospirosis"),
+            (find_col(rd, ["dengueCases"]),   C_RED,    "Dengue"),
+            (find_col(rd, ["malariaCases"]),  C_PURPLE, "Malaria"),
+            (find_col(rd, ["leptospirosis"]), C_GREEN,  "Leptospirosis"),
         ]:
             if col:
                 rd_plot = coerce_numeric(rd_plot, [col])
@@ -1324,10 +1711,10 @@ def page_interconnections(d):
     fig_rain.update_layout(**PL("Rainfall Index vs Vector Disease Cases",
                                  xaxis_title="Rainfall Index", yaxis_title="Cases"))
 
-    # Interaction strength before/after
-    ints_label_col = find_col(ints, ["interaction"])
+    # ── Interaction strength before/after ─────────────────────────────────
+    ints_label_col   = find_col(ints, ["interaction"])
     ints_current_col = find_col(ints, ["current"])
-    ints_after_col = find_col(ints, ["afterIntervention", "after_intervention"])
+    ints_after_col   = find_col(ints, ["afterIntervention", "after_intervention"])
     fig_int = empty_fig("No interaction strength data available")
     if ints_label_col and ints_current_col and ints_after_col:
         ints_plot = coerce_numeric(ints, [ints_current_col, ints_after_col]).dropna(subset=[ints_label_col, ints_current_col, ints_after_col])
@@ -1341,23 +1728,23 @@ def page_interconnections(d):
     fig_int.update_layout(**PL("Cross-Pillar Interaction — Before vs After",
                                 barmode="group", yaxis_title="Interaction Score"))
 
-    # Risk bubble chart
+    # ── Risk bubble chart ─────────────────────────────────────────────────
     rm_likelihood_col = find_col(rm, ["likelihood"])
-    rm_impact_col = find_col(rm, ["impact"])
-    rm_urgency_col = find_col(rm, ["urgency"])
-    rm_factor_col = find_col(rm, ["factor"])
+    rm_impact_col     = find_col(rm, ["impact"])
+    rm_urgency_col    = find_col(rm, ["urgency"])
+    rm_factor_col     = find_col(rm, ["factor"])
     fig_bub = empty_fig("No risk matrix data available")
     if rm_likelihood_col and rm_impact_col and rm_urgency_col and rm_factor_col:
         rm_plot = coerce_numeric(rm, [rm_likelihood_col, rm_impact_col, rm_urgency_col])
         rm_plot = rm_plot.dropna(subset=[rm_likelihood_col, rm_impact_col, rm_urgency_col, rm_factor_col]).copy()
         if not rm_plot.empty:
             fig_bub = px.scatter(
-            rm_plot, x=rm_likelihood_col, y=rm_impact_col, size=rm_urgency_col,
-            hover_name=rm_factor_col, text=rm_factor_col, size_max=55,
-            color=rm_urgency_col,
-            color_continuous_scale=[[0, C_GREEN], [0.4, C_AMBER], [0.7, C_RED], [1, "#7f1d1d"]],
-            title="Risk Matrix — Likelihood vs Impact (size = Urgency)",
-            labels={rm_likelihood_col: "Likelihood (%)", rm_impact_col: "Impact Score"},
+                rm_plot, x=rm_likelihood_col, y=rm_impact_col, size=rm_urgency_col,
+                hover_name=rm_factor_col, text=rm_factor_col, size_max=55,
+                color=rm_urgency_col,
+                color_continuous_scale=[[0, C_GREEN], [0.4, C_AMBER], [0.7, C_RED], [1, "#7f1d1d"]],
+                title="Risk Matrix — Likelihood vs Impact (size = Urgency)",
+                labels={rm_likelihood_col: "Likelihood (%)", rm_impact_col: "Impact Score"},
             )
             fig_bub.update_traces(textposition="top center", textfont=dict(size=9, color=MUTED))
             fig_bub.update_layout(**PL())
@@ -1367,14 +1754,13 @@ def page_interconnections(d):
         section_banner("Interconnectedness", "HOW HUMAN · ANIMAL · ENVIRONMENT HEALTH ARE LINKED IN BETTAHALASURU"),
 
         html.Div([
-            kpi_card("Top Risk — Urgency",   "95",    "score", "Water contamination",          "red"),
-            kpi_card("Rainfall Corr.",        "High",  "",      "Dengue spike 2022",            "amber"),
-            kpi_card("Lepto Env Route",       "60",    "%",     "Environmental/soil dominant",  "green"),
-            kpi_card("Rabies ABC+Vacc",       "86",    "%",     "Reduction vs no intervention", "blue"),
-            kpi_card("Full OH 2030",          "−80",   "%",     "Burden vs doing nothing",      "green"),
+            kpi_card("Top Risk — Urgency", top_risk_urgency, "score", "Highest urgency factor",       "red"),
+            kpi_card("Rainfall Corr.",     rainfall_corr,    "",      "Dengue correlation index",     "amber"),
+            kpi_card("Lepto Env Route",    lepto_env_pct,    "%",     "Environmental/soil dominant",  "green"),
+            kpi_card("Rabies ABC+Vacc",    abc_vacc_eff,     "%",     "Reduction vs no intervention", "blue"),
+            kpi_card("Full OH 2030",       oh_reduction,     "%",     "Burden vs doing nothing",      "green"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
-        # Context box
         html.Div([
             html.P([
                 html.Strong("One Health Nexus: "),
@@ -1389,35 +1775,38 @@ def page_interconnections(d):
             "padding": "14px 18px", "marginBottom": "20px",
         }),
 
-        # Pathway indicators
         html.Div([
             html.Div([
                 html.Div([
                     html.Span("👤→🌿", style={"fontSize": "14px"}),
                     html.Span("Human → Environment", style={"fontSize": "11px", "fontWeight": "600", "color": C_BLUE, "marginLeft": "6px"}),
                 ], style={"display": "flex", "alignItems": "center"}),
-                html.P("Effluent TDS 1,420 ppm | TNTC at lake entries | Open borewell breeding", style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
+                html.P(f"Effluent TDS {effluent_tds} ppm | TNTC at lake entries | Open borewell breeding",
+                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_BLUE}"}),
             html.Div([
                 html.Div([
                     html.Span("🐾→🌿", style={"fontSize": "14px"}),
                     html.Span("Animal → Environment", style={"fontSize": "11px", "fontWeight": "600", "color": C_GREEN, "marginLeft": "6px"}),
                 ], style={"display": "flex", "alignItems": "center"}),
-                html.P("Horse stable TNTC | Doxy residues in soil-water | E. coli from manure", style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
+                html.P("Horse stable TNTC | Doxy residues in soil-water | E. coli from manure",
+                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_GREEN}"}),
             html.Div([
                 html.Div([
                     html.Span("🌿→👤", style={"fontSize": "14px"}),
                     html.Span("Environment → Human", style={"fontSize": "11px", "fontWeight": "600", "color": C_RED, "marginLeft": "6px"}),
                 ], style={"display": "flex", "alignItems": "center"}),
-                html.P("AQI 135 + 37% humidity | Contaminated lake water consumed | Monsoon vectors", style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
+                html.P(f"AQI {fmt_num(aqi_val)} + {humidity_val}% humidity | Contaminated lake water consumed | Monsoon vectors",
+                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_RED}"}),
             html.Div([
                 html.Div([
                     html.Span("🐾→👤", style={"fontSize": "14px"}),
                     html.Span("Animal → Human", style={"fontSize": "11px", "fontWeight": "600", "color": C_PURPLE, "marginLeft": "6px"}),
                 ], style={"display": "flex", "alignItems": "center"}),
-                html.P("Rabies 13% post-ABC | Leptospirosis 15 cases | AMR food-chain risk", style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
+                html.P("Rabies post-ABC | Leptospirosis risk | AMR food-chain risk",
+                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
             ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_PURPLE}"}),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(4,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
@@ -1442,14 +1831,16 @@ def page_guard(page_fn):
             return page_fn(d)
         except Exception as e:
             print(f"[ERROR] Page failed: {e}")
+            import traceback
+            traceback.print_exc()
             return html.Div("Error loading page")
     return wrapped
 
 
-page_overview = page_guard(page_overview)
-page_human = page_guard(page_human)
-page_animal = page_guard(page_animal)
-page_environment = page_guard(page_environment)
+page_overview        = page_guard(page_overview)
+page_human           = page_guard(page_human)
+page_animal          = page_guard(page_animal)
+page_environment     = page_guard(page_environment)
 page_interconnections = page_guard(page_interconnections)
 
 
@@ -1486,6 +1877,14 @@ TAB_CFG = [
     ("environment",      "🌿  Environment Pillar"),
     ("interconnections", "⟳  Interconnectedness"),
 ]
+
+# ── Initial header values (refreshed dynamically via callback) ───────────
+_INIT_AQI, _INIT_POP = _extract_header_values(DATA)
+if _INIT_AQI == "—":
+    _INIT_AQI = "—"
+if _INIT_POP == "—":
+    _INIT_POP = "—"
+
 
 app.layout = html.Div([
     dcc.Interval(id="refresh-interval", interval=60 * 1000, n_intervals=0),
@@ -1524,13 +1923,17 @@ app.layout = html.Div([
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
             }),
-            html.Div(["Population ", html.Span("~3,573", style={"color": C_BLUE, "fontWeight": "600"})], style={
+            html.Div(id="header-population", children=[
+                "Population ", html.Span(_INIT_POP, style={"color": C_BLUE, "fontWeight": "600"}),
+            ], style={
                 "padding": "5px 12px", "borderRadius": "20px",
                 "background": "rgba(0,0,0,0.06)", "border": f"1px solid {BORDER}",
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
             }),
-            html.Div(["AQI ", html.Span("135", style={"color": C_AMBER, "fontWeight": "600"})], style={
+            html.Div(id="header-aqi", children=[
+                "AQI ", html.Span(_INIT_AQI, style={"color": C_AMBER, "fontWeight": "600"}),
+            ], style={
                 "padding": "5px 12px", "borderRadius": "20px",
                 "background": "rgba(0,0,0,0.06)", "border": f"1px solid {BORDER}",
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
@@ -1591,7 +1994,6 @@ app.layout = html.Div([
         },
     ),
 
-    # ── Page content ─────────────────────────────────────────────────────
     html.Div(id="page-content", style={
         "padding": "36px 40px 60px",
         "maxWidth": "1440px", "margin": "0 auto",
@@ -1611,22 +2013,28 @@ app.layout = html.Div([
 # CALLBACKS
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 @app.callback(
-    Output("data-timestamp", "data"),
-    Output("last-update-display", "children"),
-    Input("refresh-interval", "n_intervals"),
-    Input("manual-refresh-btn", "n_clicks"),
+    Output("data-timestamp",     "data"),
+    Output("last-update-display","children"),
+    Output("header-aqi",         "children"),
+    Output("header-population",  "children"),
+    Input("refresh-interval",    "n_intervals"),
+    Input("manual-refresh-btn",  "n_clicks"),
 )
 def refresh_data(n_intervals, n_clicks):
     global DATA
     DATA = load_all()
     ts = datetime.now().strftime("%d %b %Y %H:%M:%S")
-    return ts, f"Updated: {ts}"
+    aqi_str, pop_str = _extract_header_values(DATA)
+    aqi_content = ["AQI ", html.Span(aqi_str, style={"color": C_AMBER, "fontWeight": "600"})]
+    pop_content  = ["Population ", html.Span(pop_str, style={"color": C_BLUE, "fontWeight": "600"})]
+    return ts, f"Updated: {ts}", aqi_content, pop_content
 
 
 @app.callback(
     Output("page-content", "children"),
-    Input("main-tabs", "value"),
+    Input("main-tabs",      "value"),
     Input("data-timestamp", "data"),
 )
 def render_page(tab, _ts):
