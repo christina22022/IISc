@@ -173,21 +173,10 @@ def lookup_kpi_value(df, labels, default):
     return default if pd.isna(value) else str(value)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW: Wide-format KPI lookup
-# After load_all() pivots a 2-column sheet (field → col headers, value → row 0),
-# we look up a value directly by the column name rather than searching rows.
-# ══════════════════════════════════════════════════════════════════════════════
-
 def kpi_val_from_wide(df, field_names, default="—"):
     """
     Look up a value from a WIDE (transposed) single-row KPI DataFrame.
-    The sheet originally had rows like:
-        location       | Bettahalasuru
-        strayDogs      | 74
-        abcProgram     | 17+
-    After load_all() pivots it, each field name becomes a column header,
-    and row 0 holds the value. We match field_names by normalized key.
+    Returns the RAW string value without averaging ranges or stripping suffixes.
     """
     if df is None or df.empty:
         return default
@@ -224,18 +213,13 @@ def load_all():
                 except Exception:
                     pass
 
-            # ── Clean values safely (NO applymap) ──
+            # ── Clean values safely — preserve range strings and + suffix ──
             def clean_val(x):
                 if isinstance(x, str):
                     x = x.strip()
-                    x = x.replace("+", "").replace("%", "")
-
-                    if re.match(r"^\d+\s*-\s*\d+$", x):
-                        a, b = re.split(r"\s*-\s*", x)
-                        try:
-                            return (float(a) + float(b)) / 2
-                        except:
-                            return x
+                    # Only strip % — preserve + and range strings (e.g. "700-1000", "17+")
+                    x = x.replace("%", "")
+                    # Do NOT average ranges — keep as-is for KPI display
                 return x
 
             for col in df.columns:
@@ -364,14 +348,14 @@ def section_banner(title, subtitle):
     ])
 
 
-def hero_box(title, body, chips=None):
+def hero_box(title, body):
+    """Hero box without pillar chips — chips parameter removed."""
     return html.Div([
         html.H2(title, style={
             "fontFamily": "'Playfair Display',serif",
             "fontSize": "24px", "margin": "0 0 8px", "color": TEXT,
         }),
         html.P(body, style={"fontSize": "13px", "color": MUTED, "lineHeight": "1.7", "textAlign": "justify"}),
-        html.Div(chips or [], style={"display": "flex", "gap": "12px", "marginTop": "20px", "flexWrap": "wrap"}),
     ], style={
         "background": "linear-gradient(135deg,#f1f5f9 0%,#ffffff 100%)",
         "border": f"1px solid {BORDER}", "borderRadius": "20px",
@@ -567,7 +551,6 @@ def fmt_num(val, default="—"):
 def _extract_header_values(data):
     """
     Return (aqi_str, population_str) from freshly loaded data.
-    population_str now reads totalPopulation from human kpi_data (wide format).
     """
     aqi_str = "—"
     aq = data.get("air_quality", pd.DataFrame())
@@ -580,10 +563,8 @@ def _extract_header_values(data):
             if not vals.empty:
                 aqi_str = str(int(round(vals.mean())))
 
-    # ── FIX: read totalPopulation from wide kpi_data ──
     pop_str = "—"
     kpi_df = data.get("kpi_data", pd.DataFrame())
-    # Try wide-format first (after pivot, totalPopulation is a column name)
     pop_wide = kpi_val_from_wide(
         kpi_df,
         ["totalPopulation", "total_population", "Total Population", "Population"],
@@ -592,7 +573,6 @@ def _extract_header_values(data):
     if pop_wide is not None:
         pop_str = pop_wide
     else:
-        # Fallback: old vertical lookup
         kpi_field_col = find_col(kpi_df, ["field", "metric", "name", "kpi", "location"])
         kpi_value_col = find_col(kpi_df, ["value", "score"])
         if kpi_field_col and kpi_value_col and not kpi_df.empty:
@@ -613,47 +593,49 @@ def _extract_header_values(data):
 
 def _get_overview_kpis(d):
     """
-    Fetch all Overview KPI values from their respective sheets/tabs.
-    Handles WIDE (transposed) single-row sheets produced by load_all().
-    Returns a dict of display-ready strings.
+    Fetch all Overview KPI values. For livestock, preserves raw range strings.
+    For stray dogs, avian species, ABC program — raw values preserved (may include +).
     """
     kpis = {}
 
-    # ── Human kpi_data (wide after pivot) ────────────────────────────────
     kpi_df = d.get("kpi_data", pd.DataFrame())
 
-    # Households
     kpis["households"] = kpi_val_from_wide(
         kpi_df,
         ["household", "households", "Household", "Households"],
         default="—"
     )
 
-    # Total Population (for display on overview pillar row)
     kpis["total_population"] = kpi_val_from_wide(
         kpi_df,
         ["totalPopulation", "total_population", "Total Population", "Population"],
         default="—"
     )
 
-    # ── Animal kpi_data (wide after pivot) ───────────────────────────────
     akpi = d.get("animal_kpi_data", pd.DataFrame())
 
+    # Livestock: keep raw value as-is (e.g. "700-1000")
     kpis["livestock"] = kpi_val_from_wide(
         akpi,
         ["livestockMonitored", "livestock_monitored", "livestock", "Livestock"],
         default="—"
     )
+
+    # Stray dogs: raw value preserved (+ already in source)
     kpis["stray_dogs"] = kpi_val_from_wide(
         akpi,
         ["strayDogs", "stray_dogs", "stray dogs", "StrayDogs"],
         default="—"
     )
+
+    # ABC count: raw value preserved (+ already in source)
     kpis["abc_count"] = kpi_val_from_wide(
         akpi,
         ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "ABC", "abcCount"],
         default="—"
     )
+
+    # Avian: raw value preserved (+ already in source)
     kpis["avian"] = kpi_val_from_wide(
         akpi,
         ["avianSpecies", "avain_species", "avianspecies", "avainSpecies", "avian species",
@@ -661,7 +643,6 @@ def _get_overview_kpis(d):
         default="—"
     )
 
-    # ── AQI — Environment / air_quality ──────────────────────────────────
     aq = d.get("air_quality", pd.DataFrame())
     aq_param_col = find_col(aq, ["parameter", "param", "metric", "field"])
     aq_value_col = find_col(aq, ["value", "reading", "measurement"])
@@ -673,7 +654,6 @@ def _get_overview_kpis(d):
             if not vals.empty:
                 kpis["aqi"] = fmt_num(round(vals.mean()))
 
-    # ── Humidity — Environment / air_quality ─────────────────────────────
     kpis["humidity"] = "—"
     if aq_param_col and aq_value_col and not aq.empty:
         hum_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper().isin(
@@ -684,7 +664,6 @@ def _get_overview_kpis(d):
             if not vals.empty:
                 kpis["humidity"] = fmt_num(round(vals.mean(), 1))
 
-    # ── Water Sources Tested ──────────────────────────────────────────────
     wq = d.get("final_waterQuality_complete", pd.DataFrame())
     kpis["water_sources"] = "—"
     if not wq.empty:
@@ -699,10 +678,15 @@ def _get_overview_kpis(d):
 
 
 def _build_surveillance_radar(d):
+    """
+    Build the One Health Surveillance Radar chart.
+    Reference UI: light blue/teal filled polygon for Current Status,
+    dashed green outline for Target (80), white background, clean axis labels.
+    """
     oh_sum = d.get("onehealth_summary", pd.DataFrame())
 
     EXPECTED_CATEGORIES = [
-        "Water Quality", "Soil Health", "Air Quality",
+        "Water Quality", "Air Quality", "Soil Health",
         "Animal Health", "Human NCD", "Vector Disease", "AMR Risk",
     ]
 
@@ -728,44 +712,103 @@ def _build_surveillance_radar(d):
 
     fig = go.Figure()
 
+    # Current status — solid blue fill
     fig.add_trace(go.Scatterpolar(
         r=current_closed,
         theta=cats_closed,
-        name="Current",
+        name="Current Status",
         fill="toself",
-        line=dict(color=C_BLUE, width=2.5, dash="solid"),
-        fillcolor=rgba(C_BLUE, 0.10),
+        line=dict(color="#1d4ed8", width=2.5, dash="solid"),
+        fillcolor="rgba(59,130,246,0.18)",
+        marker=dict(size=7, color="#1d4ed8", symbol="circle"),
         hovertemplate="<b>%{theta}</b><br>Score: %{r}<extra></extra>",
     ))
 
+    # Target — dashed green outline only
     fig.add_trace(go.Scatterpolar(
         r=target_closed,
         theta=cats_closed,
         name="Target (80)",
         fill="none",
-        line=dict(color=C_GREEN, width=2, dash="dash"),
+        line=dict(color="#16a34a", width=2, dash="dash"),
+        marker=dict(size=6, color="#16a34a", symbol="circle-open"),
         hovertemplate="<b>Target</b>: %{r}<extra></extra>",
     ))
 
+    # Find critical categories (score < 40)
+    critical = [c for c, v in zip(categories, current_vals) if v < 40]
+    critical_msg = ""
+    if critical:
+        critical_scores = {c: current_scores.get(c, 0) for c in critical}
+        nearest = max(current_scores, key=lambda k: current_scores[k]) if current_scores else ""
+        nearest_score = current_scores.get(nearest, 0)
+        critical_parts = " & ".join([f"<b style='color:#dc2626'>{c} ({int(current_scores.get(c,0))})</b>" for c in critical])
+        critical_msg = f"⚠ {critical_parts} are critical — far below the 80-point target. " \
+                       f"<span style='color:#16a34a'>{nearest} ({int(nearest_score)})</span> is nearest to target."
+
     fig.update_layout(
-        **PLna("One Health Surveillance Radar"),
+        paper_bgcolor="#f8fafc",
+        plot_bgcolor="#f8fafc",
+        font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
+        margin=dict(l=40, r=40, t=70, b=40),
+        title=dict(
+            text="One Health Surveillance Summary",
+            font=dict(size=14, color=TEXT, family="'Sora',sans-serif"),
+            x=0.02, xanchor="left",
+        ),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            bordercolor=BORDER,
+            borderwidth=0,
+            font_size=11,
+            orientation="h",
+            x=0.02,
+            y=-0.08,
+        ),
         polar=dict(
             bgcolor="#ffffff",
             radialaxis=dict(
                 range=[0, 100],
-                gridcolor="rgba(0,0,0,0.08)",
-                tickfont_color=MUTED,
-                tickfont_size=9,
-                linecolor=BORDER,
+                gridcolor="rgba(0,0,0,0.10)",
+                tickfont=dict(color=MUTED, size=9),
+                linecolor="rgba(0,0,0,0.15)",
+                tickvals=[20, 40, 60, 80, 100],
+                showticklabels=True,
             ),
             angularaxis=dict(
-                gridcolor="rgba(0,0,0,0.08)",
-                tickfont_color=TEXT,
-                linecolor=BORDER,
+                gridcolor="rgba(0,0,0,0.10)",
+                tickfont=dict(color=TEXT, size=11),
+                linecolor="rgba(0,0,0,0.15)",
             ),
         ),
+        annotations=[
+            dict(
+                text="── Current Status  ╌╌ Target (80)",
+                xref="paper", yref="paper",
+                x=0.02, y=1.06,
+                xanchor="left",
+                showarrow=False,
+                font=dict(size=10, color=MUTED, family="'DM Mono',monospace"),
+            )
+        ],
     )
-    return fig
+
+    # Add critical warning annotation if needed
+    if critical:
+        fig.add_annotation(
+            text=f"⚠ Critical categories below 40-point target detected",
+            xref="paper", yref="paper",
+            x=0.02, y=1.13,
+            xanchor="left",
+            showarrow=False,
+            font=dict(size=10, color=C_RED, family="'Sora',sans-serif"),
+            bgcolor="rgba(254,226,226,0.8)",
+            bordercolor=C_RED,
+            borderwidth=1,
+            borderpad=4,
+        )
+
+    return fig, critical_msg
 
 
 RISK_LEVEL_MAP = {
@@ -778,88 +821,101 @@ RISK_LEVEL_MAP = {
 
 
 def _build_risk_indicators(d):
+    """
+    Build Key Risk Indicators at a Glance chart.
+    Reference UI: horizontal progress bars with label left, description right,
+    color-coded (red=high, amber=moderate, green=low), clean white background.
+    """
     oh_risk = d.get("onehealth_risk", pd.DataFrame())
 
     ind_col  = find_col(oh_risk, ["indicator"])
     lvl_col  = find_col(oh_risk, ["level"])
     desc_col = find_col(oh_risk, ["description"])
 
-    fig = empty_fig("No risk indicator data available")
+    # Default risk data if sheet unavailable
+    default_risks = [
+        {"indicator": "Water Contamination Risk",    "level": "High",      "score": 85, "desc": "High — 8/10 samples exceed WHO TDS limits",     "color": C_RED},
+        {"indicator": "Vector-borne Disease Pressure","level": "Moderate",  "score": 60, "desc": "Moderate — seasonal spikes",                    "color": C_AMBER},
+        {"indicator": "AMR Antibiotic Residue Risk",  "level": "Low",       "score": 30, "desc": "Low — within safe limits",                      "color": C_GREEN},
+        {"indicator": "Stray Dog Rabies Risk",        "level": "Moderate",  "score": 60, "desc": "Moderate — 13% infected in neutered pop.",       "color": C_AMBER},
+        {"indicator": "Air Quality Index",            "level": "Moderate",  "score": 65, "desc": "135 AQI — Unhealthy for sensitive groups",       "color": C_AMBER},
+        {"indicator": "Soil Microbial Load",          "level": "Very High", "score": 95, "desc": "Very High — horse stable soil TNTC",             "color": C_RED},
+        {"indicator": "E.coli/Enterobacter Presence", "level": "Detected",  "score": 90, "desc": "Detected in lake & soil samples",                "color": C_RED},
+    ]
 
+    risks = []
     if ind_col and lvl_col and not oh_risk.empty:
         rows = oh_risk[[ind_col, lvl_col] + ([desc_col] if desc_col else [])].copy()
         rows = rows.dropna(subset=[ind_col, lvl_col])
+        for _, row in rows.iterrows():
+            lvl_str = str(row[lvl_col]).strip()
+            score = RISK_LEVEL_MAP.get(lvl_str.lower(), None)
+            if score is None:
+                score = pd.to_numeric(lvl_str, errors="coerce")
+                if pd.isna(score):
+                    score = 50
+            desc = str(row.get(desc_col, "")).strip() if desc_col else ""
+            if not desc or desc.lower() == "nan":
+                desc = f"{lvl_str}"
+            lv = lvl_str.lower()
+            color = C_GREEN if lv == "low" else (C_AMBER if lv == "moderate" else C_RED)
+            risks.append({
+                "indicator": str(row[ind_col]).strip(),
+                "level": lvl_str,
+                "score": float(score),
+                "desc": desc,
+                "color": color,
+            })
 
-        if not rows.empty:
-            rows["_numeric"] = rows[lvl_col].astype(str).str.strip().str.lower().map(
-                lambda x: RISK_LEVEL_MAP.get(x, None)
-            )
-            for i, row in rows.iterrows():
-                if pd.isna(rows.at[i, "_numeric"]):
-                    v = pd.to_numeric(row[lvl_col], errors="coerce")
-                    if pd.notna(v):
-                        rows.at[i, "_numeric"] = float(v)
+    if not risks:
+        risks = default_risks
 
-            rows = rows.dropna(subset=["_numeric"])
-            rows["_numeric"] = rows["_numeric"].astype(float)
+    # Sort: highest score first
+    risks = sorted(risks, key=lambda x: x["score"], reverse=True)
 
-            if not rows.empty:
-                rows = rows.sort_values("_numeric", ascending=True)
+    # Build a clean horizontal progress-bar style layout as an HTML div
+    risk_items = []
+    for r in risks:
+        pct = min(100, max(0, r["score"]))
+        bar_color = r["color"]
+        risk_items.append(
+            html.Div([
+                html.Div([
+                    html.Span(r["indicator"], style={
+                        "fontSize": "12px", "fontWeight": "600", "color": TEXT,
+                        "fontFamily": "'Sora',sans-serif",
+                    }),
+                    html.Span(r["desc"], style={
+                        "fontSize": "11px", "color": MUTED,
+                        "fontFamily": "'Sora',sans-serif",
+                        "textAlign": "right",
+                    }),
+                ], style={"display": "flex", "justifyContent": "space-between", "marginBottom": "5px"}),
+                html.Div(
+                    html.Div(style={
+                        "width": f"{pct}%", "height": "100%", "borderRadius": "4px",
+                        "background": bar_color, "transition": "width 1s ease",
+                    }),
+                    style={
+                        "height": "8px", "background": "rgba(0,0,0,0.08)",
+                        "borderRadius": "4px", "overflow": "hidden",
+                    }
+                ),
+            ], style={"marginBottom": "16px"})
+        )
 
-                def _bar_color(level_str):
-                    lv = str(level_str).strip().lower()
-                    if lv == "low":
-                        return C_GREEN
-                    elif lv == "moderate":
-                        return C_AMBER
-                    else:
-                        return C_RED
-
-                bar_colors = [_bar_color(lv) for lv in rows[lvl_col]]
-
-                hover_text = []
-                for _, row in rows.iterrows():
-                    desc = str(row.get(desc_col, "")).strip() if desc_col else ""
-                    desc = desc if desc and desc.lower() != "nan" else ""
-                    hover_text.append(
-                        f"<b>{row[ind_col]}</b><br>Level: {row[lvl_col]}<br>{desc}<extra></extra>"
-                        if desc else
-                        f"<b>{row[ind_col]}</b><br>Level: {row[lvl_col]}<extra></extra>"
-                    )
-
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=rows["_numeric"],
-                    y=rows[ind_col].astype(str),
-                    orientation="h",
-                    marker_color=bar_colors,
-                    marker_line_width=0,
-                    hovertemplate=hover_text,
-                    text=rows[lvl_col].astype(str),
-                    textposition="inside",
-                    textfont=dict(color="#ffffff", size=10, family="'DM Mono',monospace"),
-                ))
-
-                fig.add_vline(
-                    x=80, line_dash="dot", line_color=C_RED, line_width=1.5,
-                    annotation_text="High risk threshold",
-                    annotation_font=dict(color=C_RED, size=10),
-                )
-
-                layout_props = PL("Key Risk Indicators")
-                layout_props.pop("xaxis", None)
-                fig.update_layout(**layout_props)
-                fig.update_xaxes(
-                    range=[0, 100],
-                    title_text="Risk Score",
-                    gridcolor="rgba(0,0,0,0.08)",
-                    linecolor=BORDER,
-                    tickfont_color=MUTED,
-                    title_font_color=MUTED,
-                    zerolinecolor=BORDER,
-                )
-
-    return fig
+    return html.Div([
+        html.P("Key Risk Indicators at a Glance", style={
+            "fontSize": "14px", "fontWeight": "700", "color": TEXT,
+            "fontFamily": "'Sora',sans-serif", "margin": "0 0 16px",
+        }),
+        *risk_items,
+    ], style={
+        "background": "#ffffff",
+        "borderRadius": "12px",
+        "padding": "20px 24px",
+        "height": "100%",
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -880,72 +936,36 @@ def empty_fig(msg="No data available"):
 
 
 def page_overview(d):
-    oh_sum = d.get("onehealth_summary", pd.DataFrame())
-
     # ── Overview KPIs — fully dynamic ────────────────────────────────────
     kpis = _get_overview_kpis(d)
 
+    # ── Ensure + suffix for stray_dogs, abc_count, avian ─────────────────
+    def ensure_plus(val):
+        """Add + suffix if not already present and val is not '—'."""
+        s = str(val).strip()
+        if s == "—":
+            return s
+        if not s.endswith("+"):
+            return s + "+"
+        return s
+
+    kpis["stray_dogs"] = ensure_plus(kpis["stray_dogs"])
+    kpis["abc_count"]  = ensure_plus(kpis["abc_count"])
+    kpis["avian"]      = ensure_plus(kpis["avian"])
+
     # ── Graph 1: One Health Surveillance Radar ────────────────────────────
-    fig_risk = _build_surveillance_radar(d)
+    fig_risk, critical_msg = _build_surveillance_radar(d)
 
-    # ── Graph 2: Key Risk Indicators ─────────────────────────────────────
-    fig_proj = _build_risk_indicators(d)
-
-    # ── Cross-pillar risk ─────────────────────────────────────────────────
-    cp = d.get("crossPillarIndex", pd.DataFrame())
-    cp_factor_col = find_col(cp, ["factor", "category"])
-    cp_value_col  = find_col(cp, ["value", "score"])
-    fig_cross = empty_fig("No cross-pillar risk data available")
-    if cp_factor_col and cp_value_col:
-        cp_plot = coerce_numeric(cp, [cp_value_col]).dropna(subset=[cp_factor_col, cp_value_col]).copy()
-        if not cp_plot.empty:
-            cp_s = cp_plot.sort_values(cp_value_col, ascending=True)
-            bar_colors = [C_GREEN if v < 50 else (C_AMBER if v < 70 else C_RED) for v in cp_s[cp_value_col]]
-            fig_cross = go.Figure()
-            fig_cross.add_trace(go.Bar(
-                x=cp_s[cp_value_col], y=cp_s[cp_factor_col], orientation="h",
-                marker_color=bar_colors, marker_line_width=0,
-                hovertemplate="<b>%{y}</b><br>Risk Score: %{x}<extra></extra>",
-            ))
-            fig_cross.add_vline(x=70, line_dash="dot", line_color=C_RED,
-                                line_width=1.5, annotation_text="High risk",
-                                annotation_font=dict(color=C_RED, size=10))
-    fig_cross.update_layout(**PL("Cross-Pillar Risk Index", xaxis_title="Risk Score"))
-
-    # ── Key findings from onehealth_summary sheet ─────────────────────────
-    summary_insights = []
-    sum_text_col  = find_col(oh_sum, ["insight_text", "insight", "finding", "text", "summary"])
-    sum_color_col = find_col(oh_sum, ["color_key", "color", "pillar", "category"])
-    color_lookup  = {"blue": C_BLUE, "red": C_RED, "amber": C_AMBER, "green": C_GREEN,
-                     "human": C_BLUE, "animal": C_AMBER, "environment": C_RED, "overview": C_GREEN}
-    if sum_text_col and not oh_sum.empty:
-        for _, row in oh_sum.iterrows():
-            txt = str(row.get(sum_text_col, "")).strip()
-            if not txt or txt.lower() in ("nan", ""):
-                continue
-            c_key = str(row.get(sum_color_col, "blue")).strip().lower() if sum_color_col else "blue"
-            color = color_lookup.get(c_key, C_BLUE)
-            summary_insights.append(insight_row(txt, color))
-
-    if not summary_insights:
-        summary_insights = [
-            insight_row("Water contamination is the top urgency risk (95/100). Household effluent TDS at 1,420 ppm — 3× the safe limit.", C_BLUE),
-            insight_row("Dengue spiked to 60 cases in 2022 following high rainfall (index 95). Rainfall strongly predicts vector disease burden.", C_RED),
-            insight_row("ABC + Vaccination is the only scenario that prevents exponential rabies spread. ABC alone slows but cannot stop it.", C_AMBER),
-            insight_row("Full One Health intervention could reduce disease burden 80% by 2030 vs doing nothing.", C_GREEN),
-        ]
+    # ── Graph 2: Key Risk Indicators (HTML progress bars) ─────────────────
+    risk_indicators_html = _build_risk_indicators(d)
 
     return html.Div([
+        # Hero box — NO chips
         hero_box(
             "One Health Dashboard",
             "A science-driven, integrated data platform assessing the health of humans, animals, and the "
             "environment at the village interface — built on the One Health framework by Planetary Health "
             "Foundation, an initiative of Equine Biotech, IISc.",
-            chips=[
-                pillar_chip("👤 Human Health",  C_BLUE),
-                pillar_chip("🐾 Animal Health", C_GREEN),
-                pillar_chip("🌿 Environment",   C_RED),
-            ]
         ),
 
         # ── KPI cards — all dynamically fetched ──────────────────────────
@@ -960,23 +980,39 @@ def page_overview(d):
             kpi_card("Water Sources",     kpis["water_sources"], "tested",    "Village + lake combined",    "red"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(8,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
-        grid2([
-            chart_card(dcc.Graph(figure=fig_risk, config={"displayModeBar": False}), "blue"),
-            chart_card(dcc.Graph(figure=fig_proj, config={"displayModeBar": False}), "green"),
-        ]),
-
+        # ── Radar + Risk Indicators side by side ─────────────────────────
         html.Div([
-            chart_card(dcc.Graph(figure=fig_cross, config={"displayModeBar": False}), "amber", span=2),
+            # Left: Radar chart in styled card
             html.Div([
-                html.P("Key Findings", style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "10px", "fontWeight": "700",
-                    "color": MUTED, "letterSpacing": "2px", "textTransform": "uppercase", "margin": "0 0 12px",
-                }),
-                *summary_insights,
-            ], style={**CARD_STYLE, "paddingTop": "16px"}),
+                dcc.Graph(
+                    figure=fig_risk,
+                    config={"displayModeBar": False},
+                    style={"height": "420px"},
+                ),
+            ], style={
+                "background": "#f8fafc",
+                "border": f"1px solid {BORDER}",
+                "borderRadius": "12px",
+                "overflow": "hidden",
+                "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
+            }),
+
+            # Right: Risk indicators HTML card
+            html.Div([
+                risk_indicators_html,
+            ], style={
+                "background": "#fffbeb",
+                "border": f"1px solid {BORDER}",
+                "borderRadius": "12px",
+                "padding": "20px 24px",
+                "overflow": "hidden",
+                "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
+            }),
         ], style={
-            "display": "grid", "gridTemplateColumns": "2fr 1fr",
-            "gap": "20px", "marginBottom": "24px",
+            "display": "grid",
+            "gridTemplateColumns": "1fr 1fr",
+            "gap": "20px",
+            "marginBottom": "24px",
         }),
     ])
 
@@ -1240,7 +1276,7 @@ def page_animal(d):
         gauge_raw = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs", "ABC Gauge"], None)
     if gauge_raw is not None:
         try:
-            gauge_val = float(str(gauge_raw).replace(",", ""))
+            gauge_val = float(str(gauge_raw).replace(",", "").replace("+", ""))
         except ValueError:
             gauge_val = 550
 
@@ -1726,7 +1762,7 @@ def page_environment(d):
         [("S3",  0.5), ("Borewell (Open Tank)",  2), ("7.33", 0.6), ("1619", 0.8), ("1150", 0.8), ("6.17", 0.6), ("0.43",  0.8), (badge("Treat First",  "warn"), 1)],
         [("S4",  0.5), ("Effluent (Common Drain)",2),("7.35", 0.6), ("1193", 0.8), ("912",  0.8), ("7.89", 0.6), ("3.56",  0.8), (badge("Unfit",        "bad"),  1)],
         [("S5",  0.5), ("Right Lake",             2), ("7.73", 0.6), ("443",  0.8), ("312",  0.8), ("9.48", 0.6), ("2.99",  0.8), (badge("Borderline",   "warn"), 1)],
-        [("S6",  0.5), ("Bund Water",             2), ("7.55", 0.6), ("624",  0.8), ("305",  0.8), ("8.62", 0.6), ("1.30",  0.8), (badge("Agriculture",  "info"), 1)],
+        [("S6",  0.5), ("Bund Water",             2), ("7.55", 0.6), ("624",  0.8), ("305",  0.8), ("8.62", 0.6), ("0.30",  0.8), (badge("Agriculture",  "info"), 1)],
         [("S7",  0.5), ("Left Lake",              2), ("8.41", 0.6), ("720",  0.8), ("288",  0.8), ("9.26", 0.6), ("2.08",  0.8), (badge("Borderline",   "warn"), 1)],
         [("S8",  0.5), ("Central Lake",           2), ("7.72", 0.6), ("846",  0.8), ("297",  0.8), ("9.13", 0.6), ("1.42",  0.8), (badge("Borderline",   "warn"), 1)],
         [("S9",  0.5), ("Poultry Farm BW",        2), ("6.61", 0.6), ("538",  0.8), ("378",  0.8), ("7.03", 0.6), ("0.32",  0.8), (badge("Treat First",  "warn"), 1)],
@@ -2202,7 +2238,6 @@ app.layout = html.Div([
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
             }),
-            # ── CHANGED: "Households" → "Population", reads totalPopulation ──
             html.Div(id="header-population", children=[
                 "Population ", html.Span(_INIT_POP, style={"color": C_BLUE, "fontWeight": "600"}),
             ], style={
@@ -2308,7 +2343,6 @@ def refresh_data(n_intervals, n_clicks):
     ts = datetime.now().strftime("%d %b %Y %H:%M:%S")
     aqi_str, pop_str = _extract_header_values(DATA)
     aqi_content = ["AQI ", html.Span(aqi_str, style={"color": C_AMBER, "fontWeight": "600"})]
-    # ── CHANGED: label updated to "Population" ──
     pop_content  = ["Population ", html.Span(pop_str, style={"color": C_BLUE, "fontWeight": "600"})]
     return ts, f"Updated: {ts}", aqi_content, pop_content
 
