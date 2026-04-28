@@ -191,35 +191,191 @@ def kpi_val_from_wide(df, field_names, default="—"):
     return default
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# FIX 2 & 3: Gram staining parser — reads wide-format gram_staining_total
+# and also counts from gram_staining_data if total sheet is unavailable
+# ══════════════════════════════════════════════════════════════════════════════
+
+def parse_gram_staining(d):
+    """
+    Parse gram staining metrics from gram_staining_total (wide format)
+    OR by counting rows in gram_staining_data.
+    Returns dict with keys:
+      total_isolates, gram_neg_pct, gram_neg_count,
+      bacillus_pct, cocci_pct, mucoid_pct
+    All values reflect the ACTUAL data in the sheets.
+    """
+    gt = d.get("gram_staining_total", pd.DataFrame())
+    gsd = d.get("gram_staining_data", pd.DataFrame())
+
+    result = {
+        "total_isolates": 0,
+        "gram_neg_pct": 0.0,
+        "gram_neg_count": 0,
+        "bacillus_pct": 0.0,
+        "cocci_pct": 0.0,
+        "mucoid_pct": 0.0,
+    }
+
+    # ── Try wide-format gram_staining_total first ─────────────────────────
+    # Expected columns: total_isolates, gram_negative_percent,
+    #                   bacillus_percent, cocci_percent, mucoid_layer_percent
+    if not gt.empty:
+        print(f"[DEBUG] gram_staining_total columns: {list(gt.columns)}")
+        print(f"[DEBUG] gram_staining_total head:\n{gt.head(2)}")
+
+        ti_col   = find_col(gt, ["total_isolates", "totalIsolates", "total isolates", "isolates"])
+        gnp_col  = find_col(gt, ["gram_negative_percent", "gramNegativePercent", "gram negative percent",
+                                  "gram_neg_pct", "gramNegPct"])
+        bac_col  = find_col(gt, ["bacillus_percent", "bacillusPercent", "bacillus percent", "bacillus"])
+        coc_col  = find_col(gt, ["cocci_percent", "cocciPercent", "cocci percent", "cocci"])
+        muc_col  = find_col(gt, ["mucoid_layer_percent", "mucoidLayerPercent", "mucoid layer percent",
+                                  "mucoid percent", "mucoid"])
+
+        if ti_col:
+            val = pd.to_numeric(gt[ti_col].iloc[0], errors="coerce")
+            if pd.notna(val):
+                result["total_isolates"] = int(val)
+
+        if gnp_col:
+            val = pd.to_numeric(gt[gnp_col].iloc[0], errors="coerce")
+            if pd.notna(val):
+                result["gram_neg_pct"] = float(val)
+
+        if bac_col:
+            val = pd.to_numeric(gt[bac_col].iloc[0], errors="coerce")
+            if pd.notna(val):
+                result["bacillus_pct"] = float(val)
+
+        if coc_col:
+            val = pd.to_numeric(gt[coc_col].iloc[0], errors="coerce")
+            if pd.notna(val):
+                result["cocci_pct"] = float(val)
+
+        if muc_col:
+            val = pd.to_numeric(gt[muc_col].iloc[0], errors="coerce")
+            if pd.notna(val):
+                result["mucoid_pct"] = float(val)
+
+        # If wide format columns were found, compute gram_neg_count and return
+        if ti_col and gnp_col:
+            result["gram_neg_count"] = int(round(result["total_isolates"] * result["gram_neg_pct"] / 100))
+            print(f"[DEBUG] gram_staining parsed result (wide): {result}")
+            return result
+
+        # ── Positional fallback if named columns not found ────────────────
+        # But only if the DataFrame clearly has the right columns by position
+        if len(gt.columns) >= 2:
+            print(f"[WARN] gram_staining_total: could not find metric/value columns by name, trying positional read")
+            # Try reading first row values positionally
+            # Columns order: total_isolates, gram_negative_percent, bacillus_percent, cocci_percent, mucoid_layer_percent
+            cols = list(gt.columns)
+            row0 = gt.iloc[0]
+            # Check if any column name contains "total" or "isolate"
+            for i, c in enumerate(cols):
+                ck = normalize_key(c)
+                if "total" in ck or "isolate" in ck:
+                    val = pd.to_numeric(row0.iloc[i], errors="coerce")
+                    if pd.notna(val):
+                        result["total_isolates"] = int(val)
+                elif "gramneg" in ck or "gramnega" in ck or "negative" in ck:
+                    val = pd.to_numeric(row0.iloc[i], errors="coerce")
+                    if pd.notna(val):
+                        result["gram_neg_pct"] = float(val)
+                elif "bacill" in ck:
+                    val = pd.to_numeric(row0.iloc[i], errors="coerce")
+                    if pd.notna(val):
+                        result["bacillus_pct"] = float(val)
+                elif "cocci" in ck:
+                    val = pd.to_numeric(row0.iloc[i], errors="coerce")
+                    if pd.notna(val):
+                        result["cocci_pct"] = float(val)
+                elif "mucoid" in ck:
+                    val = pd.to_numeric(row0.iloc[i], errors="coerce")
+                    if pd.notna(val):
+                        result["mucoid_pct"] = float(val)
+
+            if result["total_isolates"] > 0:
+                result["gram_neg_count"] = int(round(result["total_isolates"] * result["gram_neg_pct"] / 100))
+                print(f"[DEBUG] gram_staining parsed result (positional): {result}")
+                return result
+
+    # ── Fallback: count directly from gram_staining_data rows ────────────
+    if not gsd.empty:
+        print(f"[DEBUG] gram_staining_data columns: {list(gsd.columns)}")
+        stain_col = find_col(gsd, ["gram_stain", "gramStain", "stain", "result", "gram stain", "type"])
+        total_rows = len(gsd.dropna(how="all"))
+        result["total_isolates"] = total_rows
+
+        if stain_col:
+            stain_vals = gsd[stain_col].astype(str).str.strip().str.lower()
+            neg_count = stain_vals.str.contains("negative|gram.neg|gram neg", na=False).sum()
+            pos_count = stain_vals.str.contains("positive|gram.pos|gram pos", na=False).sum()
+            if neg_count + pos_count > 0:
+                result["gram_neg_count"] = int(neg_count)
+                result["gram_neg_pct"] = round(neg_count / (neg_count + pos_count) * 100, 2)
+            else:
+                result["gram_neg_count"] = total_rows
+                result["gram_neg_pct"] = 100.0
+
+        # morphology from gram_staining_data
+        morph_col = find_col(gsd, ["morphology", "shape", "colony_morphology", "colony morphology"])
+        if morph_col:
+            morph_vals = gsd[morph_col].astype(str).str.strip().str.lower()
+            bac_count = morph_vals.str.contains("bacill|rod", na=False).sum()
+            coc_count = morph_vals.str.contains("cocc|sphere|spherical", na=False).sum()
+            if total_rows > 0:
+                result["bacillus_pct"] = round(bac_count / total_rows * 100, 2)
+                result["cocci_pct"] = round(coc_count / total_rows * 100, 2)
+
+        mucoid_col = find_col(gsd, ["mucoid", "capsule", "mucoid_layer"])
+        if mucoid_col:
+            muc_vals = gsd[mucoid_col].astype(str).str.strip().str.lower()
+            muc_count = muc_vals.str.contains("yes|present|true|mucoid", na=False).sum()
+            if total_rows > 0:
+                result["mucoid_pct"] = round(muc_count / total_rows * 100, 2)
+
+        print(f"[DEBUG] gram_staining parsed result (from gsd rows): {result}")
+
+    return result
+
+
 def load_all():
-    import re
     d = {}
 
     for t in TABS.keys():
         try:
             df = fetch(t)
 
-            # ✅ Ensure it's a proper DataFrame
             if not isinstance(df, pd.DataFrame):
                 try:
                     df = pd.DataFrame(df)
                 except Exception:
                     df = pd.DataFrame()
 
-            # ── Convert vertical → horizontal ──
+            # ── For gram_staining_total: do NOT pivot — it's already wide ──
+            if t == "gram_staining_total":
+                # Just clean values, skip the 2-column pivot logic
+                def clean_val(x):
+                    if isinstance(x, str):
+                        x = x.strip().replace("%", "")
+                    return x
+                for col in df.columns:
+                    df[col] = df[col].apply(clean_val)
+                d[t] = df
+                continue
+
+            # ── Convert vertical → horizontal for other 2-column sheets ──
             if df.shape[1] == 2:
                 try:
                     df = df.set_index(df.columns[0]).T.reset_index(drop=True)
                 except Exception:
                     pass
 
-            # ── Clean values safely — preserve range strings and + suffix ──
             def clean_val(x):
                 if isinstance(x, str):
                     x = x.strip()
-                    # Only strip % — preserve + and range strings (e.g. "700-1000", "17+")
                     x = x.replace("%", "")
-                    # Do NOT average ranges — keep as-is for KPI display
                 return x
 
             for col in df.columns:
@@ -230,8 +386,6 @@ def load_all():
         except Exception as e:
             print(f"[ERROR] Could not load {t}: {e}")
             d[t] = pd.DataFrame()
-
-    # ── KEEP YOUR ORIGINAL LOGIC ──
 
     if "final_waterQuality_complete" in d:
         d["water_quality"] = d["final_waterQuality_complete"].copy()
@@ -349,7 +503,6 @@ def section_banner(title, subtitle):
 
 
 def hero_box(title, body):
-    """Hero box without pillar chips — chips parameter removed."""
     return html.Div([
         html.H2(title, style={
             "fontFamily": "'Playfair Display',serif",
@@ -533,12 +686,10 @@ def insight_row(text, color):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def kpi_val(df, labels, default="—"):
-    """Look up a value in a KPI/metric sheet by metric name."""
     return lookup_kpi_value(df, labels, default)
 
 
 def fmt_num(val, default="—"):
-    """Format a numeric value cleanly; return default if invalid."""
     try:
         v = float(val)
         if v == int(v):
@@ -549,9 +700,6 @@ def fmt_num(val, default="—"):
 
 
 def _extract_header_values(data):
-    """
-    Return (aqi_str, population_str) from freshly loaded data.
-    """
     aqi_str = "—"
     aq = data.get("air_quality", pd.DataFrame())
     aq_param_col = find_col(aq, ["parameter", "param", "metric"])
@@ -592,10 +740,6 @@ def _extract_header_values(data):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _get_overview_kpis(d):
-    """
-    Fetch all Overview KPI values. For livestock, preserves raw range strings.
-    For stray dogs, avian species, ABC program — raw values preserved (may include +).
-    """
     kpis = {}
 
     kpi_df = d.get("kpi_data", pd.DataFrame())
@@ -614,28 +758,24 @@ def _get_overview_kpis(d):
 
     akpi = d.get("animal_kpi_data", pd.DataFrame())
 
-    # Livestock: keep raw value as-is (e.g. "700-1000")
     kpis["livestock"] = kpi_val_from_wide(
         akpi,
         ["livestockMonitored", "livestock_monitored", "livestock", "Livestock"],
         default="—"
     )
 
-    # Stray dogs: raw value preserved (+ already in source)
     kpis["stray_dogs"] = kpi_val_from_wide(
         akpi,
         ["strayDogs", "stray_dogs", "stray dogs", "StrayDogs"],
         default="—"
     )
 
-    # ABC count: raw value preserved (+ already in source)
     kpis["abc_count"] = kpi_val_from_wide(
         akpi,
         ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "ABC", "abcCount"],
         default="—"
     )
 
-    # Avian: raw value preserved (+ already in source)
     kpis["avian"] = kpi_val_from_wide(
         akpi,
         ["avianSpecies", "avain_species", "avianspecies", "avainSpecies", "avian species",
@@ -678,11 +818,6 @@ def _get_overview_kpis(d):
 
 
 def _build_surveillance_radar(d):
-    """
-    Build the One Health Surveillance Radar chart.
-    Reference UI: light blue/teal filled polygon for Current Status,
-    dashed green outline for Target (80), white background, clean axis labels.
-    """
     oh_sum = d.get("onehealth_summary", pd.DataFrame())
 
     EXPECTED_CATEGORIES = [
@@ -712,7 +847,6 @@ def _build_surveillance_radar(d):
 
     fig = go.Figure()
 
-    # Current status — solid blue fill
     fig.add_trace(go.Scatterpolar(
         r=current_closed,
         theta=cats_closed,
@@ -724,7 +858,6 @@ def _build_surveillance_radar(d):
         hovertemplate="<b>%{theta}</b><br>Score: %{r}<extra></extra>",
     ))
 
-    # Target — dashed green outline only
     fig.add_trace(go.Scatterpolar(
         r=target_closed,
         theta=cats_closed,
@@ -735,16 +868,8 @@ def _build_surveillance_radar(d):
         hovertemplate="<b>Target</b>: %{r}<extra></extra>",
     ))
 
-    # Find critical categories (score < 40)
     critical = [c for c, v in zip(categories, current_vals) if v < 40]
     critical_msg = ""
-    if critical:
-        critical_scores = {c: current_scores.get(c, 0) for c in critical}
-        nearest = max(current_scores, key=lambda k: current_scores[k]) if current_scores else ""
-        nearest_score = current_scores.get(nearest, 0)
-        critical_parts = " & ".join([f"<b style='color:#dc2626'>{c} ({int(current_scores.get(c,0))})</b>" for c in critical])
-        critical_msg = f"⚠ {critical_parts} are critical — far below the 80-point target. " \
-                       f"<span style='color:#16a34a'>{nearest} ({int(nearest_score)})</span> is nearest to target."
 
     fig.update_layout(
         paper_bgcolor="#f8fafc",
@@ -793,7 +918,6 @@ def _build_surveillance_radar(d):
         ],
     )
 
-    # Add critical warning annotation if needed
     if critical:
         fig.add_annotation(
             text=f"⚠ Critical categories below 40-point target detected",
@@ -821,18 +945,12 @@ RISK_LEVEL_MAP = {
 
 
 def _build_risk_indicators(d):
-    """
-    Build Key Risk Indicators at a Glance chart.
-    Reference UI: horizontal progress bars with label left, description right,
-    color-coded (red=high, amber=moderate, green=low), clean white background.
-    """
     oh_risk = d.get("onehealth_risk", pd.DataFrame())
 
     ind_col  = find_col(oh_risk, ["indicator"])
     lvl_col  = find_col(oh_risk, ["level"])
     desc_col = find_col(oh_risk, ["description"])
 
-    # Default risk data if sheet unavailable
     default_risks = [
         {"indicator": "Water Contamination Risk",    "level": "High",      "score": 85, "desc": "High — 8/10 samples exceed WHO TDS limits",     "color": C_RED},
         {"indicator": "Vector-borne Disease Pressure","level": "Moderate",  "score": 60, "desc": "Moderate — seasonal spikes",                    "color": C_AMBER},
@@ -870,10 +988,8 @@ def _build_risk_indicators(d):
     if not risks:
         risks = default_risks
 
-    # Sort: highest score first
     risks = sorted(risks, key=lambda x: x["score"], reverse=True)
 
-    # Build a clean horizontal progress-bar style layout as an HTML div
     risk_items = []
     for r in risks:
         pct = min(100, max(0, r["score"]))
@@ -936,12 +1052,9 @@ def empty_fig(msg="No data available"):
 
 
 def page_overview(d):
-    # ── Overview KPIs — fully dynamic ────────────────────────────────────
     kpis = _get_overview_kpis(d)
 
-    # ── Ensure + suffix for stray_dogs, abc_count, avian ─────────────────
     def ensure_plus(val):
-        """Add + suffix if not already present and val is not '—'."""
         s = str(val).strip()
         if s == "—":
             return s
@@ -953,14 +1066,10 @@ def page_overview(d):
     kpis["abc_count"]  = ensure_plus(kpis["abc_count"])
     kpis["avian"]      = ensure_plus(kpis["avian"])
 
-    # ── Graph 1: One Health Surveillance Radar ────────────────────────────
     fig_risk, critical_msg = _build_surveillance_radar(d)
-
-    # ── Graph 2: Key Risk Indicators (HTML progress bars) ─────────────────
     risk_indicators_html = _build_risk_indicators(d)
 
     return html.Div([
-        # Hero box — NO chips
         hero_box(
             "One Health Dashboard",
             "A science-driven, integrated data platform assessing the health of humans, animals, and the "
@@ -968,7 +1077,6 @@ def page_overview(d):
             "Foundation, an initiative of Equine Biotech, IISc.",
         ),
 
-        # ── KPI cards — all dynamically fetched ──────────────────────────
         html.Div([
             kpi_card("Households",        kpis["households"],    "",          "Bettahalasuru, Karnataka",   "blue"),
             kpi_card("Livestock",         kpis["livestock"],     "animals",   "Via Vet Department",         "green"),
@@ -980,9 +1088,7 @@ def page_overview(d):
             kpi_card("Water Sources",     kpis["water_sources"], "tested",    "Village + lake combined",    "red"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(8,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
-        # ── Radar + Risk Indicators side by side ─────────────────────────
         html.Div([
-            # Left: Radar chart in styled card
             html.Div([
                 dcc.Graph(
                     figure=fig_risk,
@@ -997,7 +1103,6 @@ def page_overview(d):
                 "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
             }),
 
-            # Right: Risk indicators HTML card
             html.Div([
                 risk_indicators_html,
             ], style={
@@ -1026,14 +1131,12 @@ def page_human(d):
     kpi = d.get("kpi_data",             pd.DataFrame())
     di  = d.get("disease_insights",     pd.DataFrame())
 
-    # ── Human KPI values — wide format ───────────────────────────────────
     h_population   = kpi_val_from_wide(kpi, ["totalPopulation", "total_population", "Total Population", "Population"], "3,573")
     h_phc_services = kpi_val_from_wide(kpi, ["phcServices", "PHC Services", "phcservices"], "8+")
     h_hypertension = kpi_val_from_wide(kpi, ["hypertension", "Hypertension", "hypertensionCases", "bpCases"], "—")
     h_dengue_peak  = kpi_val_from_wide(kpi, ["denguePeak", "dengue", "dengueCases", "Dengue"], "—")
     h_malaria_range= kpi_val_from_wide(kpi, ["malariaRange", "malaria", "malariaCases", "Malaria"], "—")
 
-    # ── Fallback to old lookup if wide returns default ────────────────────
     if h_population == "3,573":
         h_population = kpi_val(kpi, ["Total Population", "Population", "Village Population"], "3,573")
     if h_phc_services == "8+":
@@ -1045,7 +1148,6 @@ def page_human(d):
     if h_malaria_range == "—":
         h_malaria_range = kpi_val(kpi, ["Malaria Range", "Malaria Cases", "Malaria"], "—")
 
-    # ── Vector highlight values from vectorInsights sheet ─────────────────
     vi_disease_col = find_col(vi, ["disease"])
     vi_cases_col   = find_col(vi, ["casesRange", "cases_range", "cases", "caseRange"])
     vi_insight_col = find_col(vi, ["insight", "description", "note"])
@@ -1067,7 +1169,6 @@ def page_human(d):
     rainfall_insight    = get_vi_value("rainfall",      vi_insight_col,
                                        "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)")
 
-    # ── Disease burden progress bars from diseaseBurden sheet ────────────
     db_cat_col = find_col(db, ["diseaseCategory", "disease_category", "disease", "category"])
     db_val_col = find_col(db, ["value", "score", "severity"])
     db_sub_col = find_col(db, ["sublabel", "sub_label", "description", "note"])
@@ -1090,7 +1191,6 @@ def page_human(d):
     db_den_pct,  db_den_sub  = get_db("dengue",          48, "Cases — peak season")
     db_lep_pct,  db_lep_sub  = get_db("leptospirosis",   18, "Monsoon linked")
 
-    # ── Disease insights from disease_insights sheet ──────────────────────
     di_text_col  = find_col(di, ["insight_text", "insight", "finding", "text"])
     di_color_col = find_col(di, ["color_key", "color", "pillar"])
     color_lk     = {"blue": C_BLUE, "red": C_RED, "amber": C_AMBER, "green": C_GREEN}
@@ -1103,7 +1203,6 @@ def page_human(d):
             c_key = str(row.get(di_color_col, "blue")).strip().lower() if di_color_col else "blue"
             disease_insight_rows.append(insight_row(txt, color_lk.get(c_key, C_BLUE)))
 
-    # ── Disease case-load bar ─────────────────────────────────────────────
     dis_col  = find_col(md, ["disease"])
     case_col = find_col(md, ["cases", "value"])
     fig_dis  = empty_fig("No disease case-load data available")
@@ -1120,7 +1219,6 @@ def page_human(d):
             ))
     fig_dis.update_layout(**PL("Major Diseases at PHC (2020–2024)", xaxis_title="Cases Reported"))
 
-    # ── Vector disease trend ──────────────────────────────────────────────
     year_col = find_col(vt, ["year"])
     fig_vec  = empty_fig("No vector disease trend data available")
     if year_col:
@@ -1146,7 +1244,6 @@ def page_human(d):
             fig_vec = empty_fig("No vector disease trend data available")
     fig_vec.update_layout(**PL("Vector-Borne Disease Trend 2020–2024", yaxis_title="Cases", xaxis_title="Year"))
 
-    # ── Screening programs table ──────────────────────────────────────────
     badge_map_bg   = {"Active": "good", "Seasonal": "warn", "Periodic": "info"}
     screening_rows = []
     if not sc.empty:
@@ -1252,14 +1349,12 @@ def page_animal(d):
     akpi = d.get("animal_kpi_data",  pd.DataFrame())
     abl  = d.get("antibioticLevels", pd.DataFrame())
 
-    # ── Animal KPI values — wide format after pivot ───────────────────────
     a_stray_dogs  = kpi_val_from_wide(akpi, ["strayDogs", "stray_dogs", "stray dogs"], "—")
     a_abc_count   = kpi_val_from_wide(akpi, ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "abcCount"], "—")
     a_rabies_rate = kpi_val_from_wide(akpi, ["rabiesInfectionRate", "rabiesRate", "rabies_rate", "rabiesInfRate", "rabiesInf"], "—")
     a_livestock   = kpi_val_from_wide(akpi, ["livestockMonitored", "livestock_monitored", "livestock"], "—")
     a_amr_status  = kpi_val_from_wide(akpi, ["amrStatus", "AMR Status", "amrOverall", "antibioticStatus"], "Safe")
 
-    # Fallback to old row-based lookup
     if a_stray_dogs == "—":
         a_stray_dogs = kpi_val(akpi, ["Stray Dogs", "Stray Dog Population", "Dogs"], "—")
     if a_abc_count == "—":
@@ -1269,7 +1364,6 @@ def page_animal(d):
     if a_livestock == "—":
         a_livestock = kpi_val(akpi, ["Livestock", "Livestock Monitored", "Animals Monitored"], "—")
 
-    # ── Stray dog gauge value ─────────────────────────────────────────────
     gauge_val = 550
     gauge_raw = kpi_val_from_wide(akpi, ["strayDogs", "stray_dogs"], None)
     if gauge_raw is None:
@@ -1280,7 +1374,6 @@ def page_animal(d):
         except ValueError:
             gauge_val = 550
 
-    # ── ABC program insight values from sheet ─────────────────────────────
     ai_insight_col = find_col(ai, ["insight", "insight_text", "finding", "text", "description"])
     ai_metric_col  = find_col(ai, ["metric", "name", "category"])
     ai_value_col   = find_col(ai, ["value", "data_value", "pct"])
@@ -1296,7 +1389,6 @@ def page_animal(d):
     neutered_infection_rate     = get_ai_metric("neutered infection",    "13%")
     non_neutered_infection_rate = get_ai_metric("non.neutered infection", "9%")
 
-    # ── ABC program table from abcProgram sheet ───────────────────────────
     abc_date_col     = find_col(abc, ["date"])
     abc_activity_col = find_col(abc, ["activity"])
     abc_count_col    = find_col(abc, ["count", "value"])
@@ -1319,7 +1411,6 @@ def page_animal(d):
         [("11-Mar-2024", 1.5), ("Released at original pickup location",                  3), (badge("17", "good"), 1)],
     ]
 
-    # ── AMR table from amrFindings sheet ─────────────────────────────────
     amr_ant_col    = find_col(amr, ["antibiotic"])
     amr_sample_col = find_col(amr, ["sampleType", "sample_type", "sample"])
     amr_level_col  = find_col(amr, ["levelFound", "level_found", "level"])
@@ -1349,7 +1440,6 @@ def page_animal(d):
         [("Amoxicillin", 1.2), ("Water",         1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
     ]
 
-    # ── Rabies projection chart ───────────────────────────────────────────
     rp_year_col = find_col(rp, ["year"])
     fig_rab = empty_fig("No rabies projection data available")
     if rp_year_col:
@@ -1377,7 +1467,6 @@ def page_animal(d):
     fig_rab.update_layout(**PL("Rabies Projection — 5-Year Model",
                                 yaxis_title="Infected Animals", xaxis_title="Year"))
 
-    # ── ABC programme activity bar ────────────────────────────────────────
     fig_abc = empty_fig("No ABC programme data available")
     if abc_activity_col and abc_count_col and not abc.empty:
         abc_plot = coerce_numeric(abc, [abc_count_col]).dropna(subset=[abc_activity_col, abc_count_col])
@@ -1399,7 +1488,6 @@ def page_animal(d):
         tickfont_color=MUTED, title_text="Animals",
     )
 
-    # ── AMR residue chart ─────────────────────────────────────────────────
     amr_antibiotic_col_c = find_col(amr, ["antibiotic"])
     amr_sample_col_c     = find_col(amr, ["sampleType", "sample_type", "sample"])
     amr_level_col_c      = find_col(amr, ["levelFound", "level_found", "level"])
@@ -1423,7 +1511,6 @@ def page_animal(d):
             ))
     fig_amr.update_layout(**PL("AMR Residue vs Permissible Limits", yaxis_title="Concentration (mg/L)"))
 
-    # ── Stray dogs gauge ──────────────────────────────────────────────────
     fig_g = go.Figure(go.Indicator(
         mode="gauge+number", value=gauge_val,
         title={"text": "Stray Dogs in Programme", "font": {"color": C_AMBER, "size": 13}},
@@ -1443,7 +1530,6 @@ def page_animal(d):
     ))
     fig_g.update_layout(**PLgauge(), height=250, margin=dict(l=24, r=24, t=44, b=16))
 
-    # ── Animal insight rows from sheet ────────────────────────────────────
     animal_insight_rows = []
     if ai_insight_col and not ai.empty:
         for i, (_, row) in enumerate(ai.iterrows()):
@@ -1523,16 +1609,30 @@ def page_animal(d):
     ])
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# FIX 1: Environment page — unique insights per chart, no duplication
+# FIX 2/3: Gram staining uses parse_gram_staining() for all values
+# FIX 4: Effluent TDS KPI label includes "(Sample 1)"
+# ══════════════════════════════════════════════════════════════════════════════
+
 def page_environment(d):
     wq  = d.get("water_quality",       pd.DataFrame())
     vc  = d.get("villagewatercfu",     pd.DataFrame())
     lc  = d.get("lake_water_cfu",      pd.DataFrame())
-    gt  = d.get("gram_staining_total", pd.DataFrame())
     gsd = d.get("gram_staining_data",  pd.DataFrame())
     mc  = d.get("microbial_analysis",  pd.DataFrame())
     aq  = d.get("air_quality",         pd.DataFrame())
     sc  = d.get("soil_cfu",            pd.DataFrame())
     pv  = d.get("physiochem_village_waterquality", pd.DataFrame())
+
+    # ── FIX 2 & 3: Parse gram staining from actual data ───────────────────
+    gs = parse_gram_staining(d)
+    total_isolates = gs["total_isolates"]
+    gram_neg_pct   = gs["gram_neg_pct"]
+    gram_neg_count = gs["gram_neg_count"]
+    bacillus_pct   = gs["bacillus_pct"]
+    cocci_pct      = gs["cocci_pct"]
+    mucoid_pct     = gs["mucoid_pct"]
 
     # ── AQI from air_quality sheet ────────────────────────────────────────
     aqi_val      = 135
@@ -1552,37 +1652,35 @@ def page_environment(d):
                 if pd.notna(parsed):
                     humidity_val = fmt_num(parsed)
 
-    # ── Gram staining metrics from gram_staining_total sheet ─────────────
-    gt_metric_col = find_col(gt, ["metric", "parameter", "name", "category"])
-    gt_value_col  = find_col(gt, ["value", "count", "percent", "pct"])
-
-    def get_gt(name, default):
-        if gt_metric_col and gt_value_col and not gt.empty:
-            row = gt[gt[gt_metric_col].astype(str).str.strip().str.lower().str.contains(name.lower())]
-            if not row.empty:
-                val = pd.to_numeric(row[gt_value_col].iloc[0], errors="coerce")
-                return float(val) if pd.notna(val) else default
-        return default
-
-    total_isolates   = int(get_gt("total isolate",   45))
-    gram_neg_pct     = get_gt("gram negative pct",  100.0)
-    bacillus_pct     = get_gt("bacillus",             65.0)
-    cocci_pct        = get_gt("cocci",                35.0)
-    mucoid_pct       = get_gt("mucoid",               30.0)
-    gram_neg_count   = int(get_gt("gram negative count", round(total_isolates * gram_neg_pct / 100)))
-
-    # ── Effluent TDS from water_quality sheet ─────────────────────────────
+    # ── FIX 4: Effluent TDS from Sample 1 specifically ───────────────────
     effluent_tds = "—"
-    wq_source_col_e  = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
-    wq_tds_col_e     = find_col(wq, ["TDS_ppm", "TDS", "tds"])
-    if wq_source_col_e and wq_tds_col_e and not wq.empty:
-        mask = wq[wq_source_col_e].astype(str).str.lower().str.contains("effluent|household", na=False)
-        if mask.any():
-            tds_raw = pd.to_numeric(wq.loc[mask, wq_tds_col_e].iloc[0], errors="coerce")
+    wq_source_col_e = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
+    wq_tds_col_e    = find_col(wq, ["TDS_ppm", "TDS", "tds"])
+    wq_id_col_kpi   = find_col(wq, ["sampleId", "sample_id", "id", "sample_no", "Sample no.", "Sample no"])
+
+    if not wq.empty and wq_tds_col_e:
+        # Try to get Sample 1 by ID first
+        if wq_id_col_kpi:
+            s1_mask = wq[wq_id_col_kpi].astype(str).str.strip().str.lower().isin(["s1", "1", "sample 1", "sample1"])
+            if s1_mask.any():
+                tds_raw = pd.to_numeric(wq.loc[s1_mask, wq_tds_col_e].iloc[0], errors="coerce")
+                if pd.notna(tds_raw):
+                    effluent_tds = f"{int(tds_raw):,}"
+        # Fallback: first row matching "effluent" in source name
+        if effluent_tds == "—" and wq_source_col_e:
+            mask = wq[wq_source_col_e].astype(str).str.lower().str.contains("effluent|household", na=False)
+            if mask.any():
+                tds_raw = pd.to_numeric(wq.loc[mask, wq_tds_col_e].iloc[0], errors="coerce")
+                if pd.notna(tds_raw):
+                    effluent_tds = f"{int(tds_raw):,}"
+        # Fallback: very first row
+        if effluent_tds == "—":
+            tds_raw = pd.to_numeric(wq[wq_tds_col_e].iloc[0], errors="coerce")
             if pd.notna(tds_raw):
                 effluent_tds = f"{int(tds_raw):,}"
 
-    # ── Water quality scatter ─────────────────────────────────────────────
+    # ── FIX 1a: Water Quality scatter — TDS vs DO with status coloring ────
+    # Shows: which sources are fit/unfit for drinking based on TDS & DO thresholds
     wq_tds_col       = find_col(wq, ["TDS_ppm", "TDS"])
     wq_do_col        = find_col(wq, ["DO_mg_L", "DO"])
     wq_status_col    = find_col(wq, ["drinking_status", "drinkingStatus"])
@@ -1598,16 +1696,72 @@ def page_environment(d):
                 wq_plot, x=wq_tds_col, y=wq_do_col, color=wq_status_col,
                 color_discrete_map=color_map, size=wq_turbidity_col, size_max=35,
                 hover_name=wq_source_col,
-                title="Water Quality — TDS vs Dissolved Oxygen",
-                labels={wq_tds_col: "TDS (ppm)", wq_do_col: "DO (mg/L)", wq_status_col: "Status"},
+                title="Water Potability — TDS vs Dissolved Oxygen",
+                labels={wq_tds_col: "TDS (ppm)", wq_do_col: "DO (mg/L)", wq_status_col: "Drinking Status"},
                 hover_data=[c for c in [find_col(wq_plot, ["pH"]), find_col(wq_plot, ["EC_mS", "EC_uS"]), wq_turbidity_col] if c],
             )
             fig_wq.add_vline(x=500, line_dash="dot", line_color=C_BLUE, line_width=1.5,
-                             annotation_text="TDS safe ≤500", annotation_font=dict(color=C_BLUE, size=10))
+                             annotation_text="TDS safe ≤500 ppm", annotation_font=dict(color=C_BLUE, size=10))
             fig_wq.add_hline(y=6, line_dash="dot", line_color=C_GREEN, line_width=1.5,
-                             annotation_text="DO safe ≥6", annotation_font=dict(color=C_GREEN, size=10))
-            fig_wq.update_layout(**PL())
-    fig_wq.update_layout(**PL("Water Quality — TDS vs Dissolved Oxygen"))
+                             annotation_text="DO safe ≥6 mg/L", annotation_font=dict(color=C_GREEN, size=10))
+    fig_wq.update_layout(**PL("Water Potability — TDS vs Dissolved Oxygen (bubble size = turbidity)"))
+
+    # ── FIX 1b: Physiochemical radar — pH, EC, turbidity profile per source ──
+    # Shows: multi-parameter physicochemical fingerprint — DIFFERENT from TDS/DO scatter
+    wq_ph_col_r  = find_col(wq, ["pH", "ph"])
+    wq_ec_col_r  = find_col(wq, ["EC_mS", "EC_uS", "EC", "ec"])
+    wq_ntu_col_r = find_col(wq, ["turbidity_NTU", "turbidity", "NTU"])
+    fig_physchem = empty_fig("No physicochemical data available")
+
+    if wq_source_col and wq_ph_col_r and wq_ec_col_r and wq_ntu_col_r and not wq.empty:
+        pc_plot = coerce_numeric(wq, [wq_ph_col_r, wq_ec_col_r, wq_ntu_col_r])
+        pc_plot = pc_plot.dropna(subset=[wq_source_col, wq_ph_col_r, wq_ec_col_r]).copy()
+
+        if not pc_plot.empty:
+            # Normalise each parameter to 0–100 for radar display
+            def norm_col(col):
+                mn, mx = pc_plot[col].min(), pc_plot[col].max()
+                if mx == mn:
+                    return pd.Series([50.0] * len(pc_plot), index=pc_plot.index)
+                return ((pc_plot[col] - mn) / (mx - mn) * 100).round(1)
+
+            pc_plot["pH_norm"]  = norm_col(wq_ph_col_r)
+            pc_plot["EC_norm"]  = norm_col(wq_ec_col_r)
+            pc_plot["NTU_norm"] = norm_col(wq_ntu_col_r) if wq_ntu_col_r else 0
+
+            # Build a grouped bar chart: each source = group, parameters = bars
+            # Shows how each source compares across pH / EC / Turbidity
+            params = ["pH (normalised)", "EC (normalised)", "Turbidity (normalised)"]
+            norm_cols = ["pH_norm", "EC_norm", "NTU_norm"]
+            colors_p = [C_BLUE, C_PURPLE, C_AMBER]
+
+            fig_physchem = go.Figure()
+            for norm_c, param, col_c in zip(norm_cols, params, colors_p):
+                if norm_c in pc_plot.columns:
+                    fig_physchem.add_trace(go.Bar(
+                        name=param,
+                        x=pc_plot[wq_source_col].astype(str),
+                        y=pc_plot[norm_c],
+                        marker_color=col_c,
+                        marker_line_width=0,
+                        hovertemplate=f"<b>%{{x}}</b><br>{param}: %{{y:.1f}}<extra></extra>",
+                    ))
+
+            # Add safe-zone reference line at 50 (midpoint)
+            fig_physchem.add_hline(
+                y=50,
+                line_dash="dot", line_color=C_GREEN, line_width=1.5,
+                annotation_text="Mid-range reference",
+                annotation_font=dict(color=C_GREEN, size=9),
+            )
+
+    fig_physchem.update_layout(**PL(
+        "Physicochemical Profile — pH, EC & Turbidity by Source (normalised 0–100)",
+        barmode="group",
+        yaxis_title="Normalised Score (0–100)",
+        xaxis_title="Water Source",
+    ))
+    fig_physchem.update_xaxes(tickangle=-20)
 
     # ── Village water CFU ─────────────────────────────────────────────────
     vc_source_col = find_col(vc, ["source", "source_name", "sourceName", "sample", "location"])
@@ -1624,7 +1778,7 @@ def page_environment(d):
                 marker_color=bclr, marker_line_width=0,
                 hovertemplate="<b>%{y}</b><br>%{x:.3f} CFU/mL<extra></extra>",
             ))
-    fig_vc.update_layout(**PL("Village Water — Mean CFU/mL", xaxis_title="CFU/mL"))
+    fig_vc.update_layout(**PL("Village Water Sources — Mean Bacterial CFU/mL", xaxis_title="CFU/mL"))
 
     # ── Lake water CFU ────────────────────────────────────────────────────
     lc_sample_col = find_col(lc, ["sample", "location", "source"])
@@ -1641,7 +1795,7 @@ def page_environment(d):
                 marker_color=bclr, marker_line_width=0,
                 hovertemplate="<b>%{x}</b><br>%{y:.3f} CFU/mL<extra></extra>",
             ))
-    fig_lc.update_layout(**PL("Lake Entry Points — Mean CFU/mL", yaxis_title="CFU/mL"))
+    fig_lc.update_layout(**PL("Lake Entry Points — Mean Bacterial CFU/mL", yaxis_title="CFU/mL"))
     fig_lc.update_xaxes(tickangle=-25)
 
     # ── Soil CFU ──────────────────────────────────────────────────────────
@@ -1658,35 +1812,21 @@ def page_environment(d):
                 marker_color=colors[:len(sc_plot)], marker_line_width=0,
                 hovertemplate="<b>%{x}</b><br>%{y:.4f} CFU/mL<extra></extra>",
             ))
-    fig_soil.update_layout(**PL("Soil CFU by Site", yaxis_title="CFU/mL"))
+    fig_soil.update_layout(**PL("Soil Microbial Load by Site (CFU/mL)", yaxis_title="CFU/mL"))
 
-    # ── Gram staining pie ─────────────────────────────────────────────────
-    fig_gr = empty_fig("No gram staining data available")
-    if gt_metric_col and gt_value_col and not gt.empty:
-        gram_neg_display = gram_neg_pct
-        fig_gr = go.Figure()
-        fig_gr.add_trace(go.Pie(
-            labels=["Gram Negative", "Gram Positive"],
-            values=[gram_neg_display, max(0, 100 - gram_neg_display)],
-            hole=0.58,
-            marker_colors=[C_RED, BORDER],
-            textfont_color=TEXT,
-        ))
-    elif not gt.empty:
-        gt_neg_col = find_col(gt, ["gram_negative_percent", "gram_neg_pct"])
-        if gt_neg_col:
-            g = gt.iloc[0]
-            val = pd.to_numeric(g[gt_neg_col], errors="coerce")
-            if pd.notna(val):
-                fig_gr = go.Figure()
-                fig_gr.add_trace(go.Pie(
-                    labels=["Gram Negative", "Gram Positive"],
-                    values=[val, 100 - val],
-                    hole=0.58,
-                    marker_colors=[C_RED, BORDER],
-                    textfont_color=TEXT,
-                ))
-    fig_gr.update_layout(**PLna(f"Gram Staining — {total_isolates} Isolates"))
+    # ── FIX 2 & 3: Gram staining pie from parsed data ────────────────────
+    fig_gr = go.Figure()
+    gram_pos_pct = max(0.0, 100.0 - gram_neg_pct)
+    fig_gr.add_trace(go.Pie(
+        labels=["Gram Negative", "Gram Positive"],
+        values=[gram_neg_pct, gram_pos_pct],
+        hole=0.58,
+        marker_colors=[C_RED, BORDER],
+        textfont_color=TEXT,
+        textinfo="label+percent",
+        hovertemplate="<b>%{label}</b><br>%{percent}<br>Count: %{value:.1f}%<extra></extra>",
+    ))
+    fig_gr.update_layout(**PLna(f"Gram Staining — {total_isolates} Isolates ({gram_neg_count} Gram–ve)"))
 
     # ── AQI gauge ─────────────────────────────────────────────────────────
     fig_aqi = go.Figure(go.Indicator(
@@ -1739,11 +1879,13 @@ def page_environment(d):
             ntu_v   = str(round(pd.to_numeric(row.get(wq_ntu_col,  "—"), errors="coerce"), 2)) if wq_ntu_col else "—"
             status  = str(row.get(wq_drink_col, "—")).strip() if wq_drink_col else "—"
             bkind   = status_badge_map.get(status.lower(), "info")
-            if "nan" in [ph_v, ec_v, tds_v, do_v]:
-                ph_v  = ph_v  if ph_v  != "nan" else "—"
-                ec_v  = ec_v  if ec_v  != "nan" else "—"
-                tds_v = tds_v if tds_v != "nan" else "—"
-                do_v  = do_v  if do_v  != "nan" else "—"
+            for attr in ["ph_v", "ec_v", "tds_v", "do_v", "ntu_v"]:
+                if locals()[attr] == "nan":
+                    locals()[attr]  # just reference; fix below
+            ph_v  = ph_v  if ph_v  != "nan" else "—"
+            ec_v  = ec_v  if ec_v  != "nan" else "—"
+            tds_v = tds_v if tds_v != "nan" else "—"
+            do_v  = do_v  if do_v  != "nan" else "—"
             ntu_v = ntu_v if ntu_v != "nan" else "—"
             wq_table_rows_dynamic.append([
                 (s_id,  0.5),
@@ -1782,19 +1924,55 @@ def page_environment(d):
                 (badge(status, "bad" if status == "High" else "warn"), 1),
             ])
 
+    # ── FIX 3: Gram staining morphology breakdown chart from gsd rows ────
+    fig_gram_morph = empty_fig("No gram staining morphology data available")
+    if not gsd.empty:
+        stain_col = find_col(gsd, ["gram_stain", "gramStain", "stain", "result", "gram stain", "gram", "type"])
+        morph_col = find_col(gsd, ["morphology", "shape", "colony_morphology", "colony morphology"])
+
+        if stain_col and not gsd.empty:
+            stain_vals = gsd[stain_col].astype(str).str.strip()
+            counts = stain_vals.value_counts()
+            if not counts.empty:
+                bar_colors = []
+                for label in counts.index:
+                    ll = label.lower()
+                    if "neg" in ll:
+                        bar_colors.append(C_RED)
+                    elif "pos" in ll:
+                        bar_colors.append(C_GREEN)
+                    else:
+                        bar_colors.append(C_BLUE)
+                fig_gram_morph = go.Figure()
+                fig_gram_morph.add_trace(go.Bar(
+                    x=counts.index.tolist(),
+                    y=counts.values.tolist(),
+                    marker_color=bar_colors,
+                    marker_line_width=0,
+                    hovertemplate="<b>%{x}</b><br>Count: %{y}<extra></extra>",
+                ))
+                fig_gram_morph.update_layout(**PL(
+                    f"Gram Staining Distribution — {total_isolates} Isolates",
+                    yaxis_title="Isolate Count",
+                    xaxis_title="Stain Result",
+                ))
+
     return html.Div([
         section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY"),
 
+        # ── FIX 4: KPI card label includes "(Sample 1)" ───────────────────
         grid4([
-            kpi_card("AQI Level",         fmt_num(aqi_val),    "",    "Unhealthy for sensitive groups", "amber"),
-            kpi_card("Humidity",          humidity_val,         "%",   "Respiratory risk assessment",    "blue"),
-            kpi_card("Effluent TDS",      effluent_tds,         "ppm", "WHO limit: 500 ppm",             "red"),
-            kpi_card("Gram –ve Isolates", f"{gram_neg_count}/{total_isolates}", "", f"{total_isolates} isolates tested", "purple"),
+            kpi_card("AQI Level",              fmt_num(aqi_val), "",    "Unhealthy for sensitive groups",     "amber"),
+            kpi_card("Humidity",               humidity_val,     "%",   "Respiratory risk assessment",        "blue"),
+            kpi_card("Effluent TDS (Sample 1)", effluent_tds,    "ppm", "S1 Effluent Household — WHO lim 500","red"),
+            kpi_card("Gram –ve Isolates",      f"{gram_neg_count}/{total_isolates}", "",
+                     f"{gram_neg_pct:.1f}% Gram-negative of {total_isolates} isolates", "purple"),
         ]),
 
+        # ── FIX 1: Two distinct water charts ─────────────────────────────
         grid2([
-            chart_card(dcc.Graph(figure=fig_wq, config={"displayModeBar": False}), "blue"),
-            chart_card(dcc.Graph(figure=fig_gr, config={"displayModeBar": False}), "red"),
+            chart_card(dcc.Graph(figure=fig_wq,       config={"displayModeBar": False}), "blue"),
+            chart_card(dcc.Graph(figure=fig_physchem, config={"displayModeBar": False}), "purple"),
         ]),
 
         html.Div([
@@ -1819,6 +1997,12 @@ def page_environment(d):
             chart_card(dcc.Graph(figure=fig_aqi,  config={"displayModeBar": False}), "amber"),
         ]),
 
+        # ── FIX 2 & 3: Gram staining — pie (Neg/Pos split) + morphology bar ──
+        grid2([
+            chart_card(dcc.Graph(figure=fig_gr,         config={"displayModeBar": False}), "red"),
+            chart_card(dcc.Graph(figure=fig_gram_morph, config={"displayModeBar": False}), "purple"),
+        ]),
+
         grid2([
             html.Div([
                 card_top_bar(C_RED),
@@ -1839,27 +2023,37 @@ def page_environment(d):
                        style={"fontSize": "11px", "color": MUTED}),
             ], style=CARD_STYLE),
 
+            # ── FIX 2 & 3: Gram staining summary uses parsed data ─────────
             html.Div([
                 card_top_bar(C_GREEN),
                 html.Div(style={"height": "6px"}),
                 card_title(f"Gram Staining Summary — {total_isolates} Isolates"),
-                progress_bar("Gram Negative (all isolates)",
-                             f"{gram_neg_count}/{total_isolates} = {gram_neg_pct:.0f}%",
-                             gram_neg_pct, "red"),
-                progress_bar("Bacillus morphology",
-                             f"~{bacillus_pct:.0f}% of isolates",
-                             bacillus_pct, "blue"),
-                progress_bar("Cocci morphology",
-                             f"~{cocci_pct:.0f}% of isolates",
-                             cocci_pct, "green"),
-                progress_bar("Mucoid layer presence",
-                             f"~{mucoid_pct:.0f}% of isolates",
-                             mucoid_pct, "purple"),
+                progress_bar(
+                    "Gram Negative (all isolates)",
+                    f"{gram_neg_count}/{total_isolates} = {gram_neg_pct:.1f}%",
+                    gram_neg_pct, "red"
+                ),
+                progress_bar(
+                    "Bacillus morphology",
+                    f"~{bacillus_pct:.1f}% of isolates",
+                    bacillus_pct, "blue"
+                ),
+                progress_bar(
+                    "Cocci morphology",
+                    f"~{cocci_pct:.1f}% of isolates",
+                    cocci_pct, "green"
+                ),
+                progress_bar(
+                    "Mucoid layer presence",
+                    f"~{mucoid_pct:.1f}% of isolates",
+                    mucoid_pct, "purple"
+                ),
                 html.Div([
                     html.P([
-                        f"All {gram_neg_count} tested isolates were ",
+                        f"{gram_neg_count} of {total_isolates} tested isolates were ",
                         html.Strong("Gram-negative", style={"color": C_RED}),
-                        f" (out of {total_isolates} total). Dominant types: rod-shaped (Bacillus) and spherical (Cocci). "
+                        f" ({gram_neg_pct:.1f}%). Dominant types: rod-shaped (Bacillus ~{bacillus_pct:.0f}%) and "
+                        f"spherical (Cocci ~{cocci_pct:.0f}%). "
                         f"Mucoid layers in ~{mucoid_pct:.0f}% suggest capsule-forming, potentially pathogenic organisms.",
                     ], style={"fontSize": "12px", "color": MUTED, "lineHeight": "1.6", "margin": "0"}),
                 ], style={"padding": "12px", "background": rgba(C_RED, 0.05), "borderRadius": "8px",
@@ -1919,7 +2113,6 @@ def page_interconnections(d):
             if pd.notna(tds_raw):
                 effluent_tds = f"{int(tds_raw):,}"
 
-    # ── Interconnection KPI values ────────────────────────────────────────
     top_risk_urgency  = "—"
     rm_factor_col_k   = find_col(rm, ["factor"])
     rm_urgency_col_k  = find_col(rm, ["urgency"])
@@ -1974,7 +2167,6 @@ def page_interconnections(d):
             if last3[proj_no3] > 0:
                 oh_reduction = f"−{fmt_num(round((1 - last3[proj_full3] / last3[proj_no3]) * 100))}"
 
-    # ── Zoonotic transmission stacked bar ─────────────────────────────────
     zoo_pathway_col = find_col(zoo, ["pathway"])
     fig_zoo = empty_fig("No zoonotic transmission data available")
     if zoo_pathway_col:
@@ -2001,7 +2193,6 @@ def page_interconnections(d):
     fig_zoo.update_layout(**PL("Zoonotic Transmission Pathways", barmode="stack", yaxis_title="Transmission %"))
     fig_zoo.update_xaxes(tickangle=-15)
 
-    # ── Rainfall vs disease ───────────────────────────────────────────────
     rd_rain_col = find_col(rd, ["rainfallIndex"])
     rd_year_col = find_col(rd, ["year"])
     fig_rain = empty_fig("No rainfall-disease data available")
@@ -2030,7 +2221,6 @@ def page_interconnections(d):
     fig_rain.update_layout(**PL("Rainfall Index vs Vector Disease Cases",
                                  xaxis_title="Rainfall Index", yaxis_title="Cases"))
 
-    # ── Interaction strength before/after ─────────────────────────────────
     ints_label_col   = find_col(ints, ["interaction"])
     ints_current_col = find_col(ints, ["current"])
     ints_after_col   = find_col(ints, ["afterIntervention", "after_intervention"])
@@ -2047,7 +2237,6 @@ def page_interconnections(d):
     fig_int.update_layout(**PL("Cross-Pillar Interaction — Before vs After",
                                 barmode="group", yaxis_title="Interaction Score"))
 
-    # ── Risk bubble chart ─────────────────────────────────────────────────
     rm_likelihood_col = find_col(rm, ["likelihood"])
     rm_impact_col     = find_col(rm, ["impact"])
     rm_urgency_col    = find_col(rm, ["urgency"])
@@ -2197,7 +2386,6 @@ TAB_CFG = [
     ("interconnections", "⟳  Interconnectedness"),
 ]
 
-# ── Initial header values ─────────────────────────────────────────────────
 _INIT_AQI, _INIT_POP = _extract_header_values(DATA)
 
 
@@ -2205,7 +2393,6 @@ app.layout = html.Div([
     dcc.Interval(id="refresh-interval", interval=60 * 1000, n_intervals=0),
     dcc.Store(id="data-timestamp", data=""),
 
-    # ── Header ──────────────────────────────────────────────────────────────
     html.Header([
         html.Div([
             html.Div("🌍", style={
@@ -2276,7 +2463,6 @@ app.layout = html.Div([
         "fontFamily": "'Sora',sans-serif",
     }),
 
-    # ── Navigation tabs ───────────────────────────────────────────────────
     dcc.Tabs(
         id="main-tabs", value="overview",
         children=[
