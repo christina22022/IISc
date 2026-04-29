@@ -5,7 +5,221 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import os
+import re
+import threading
+import time
 from datetime import datetime
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LIVE AQI / HUMIDITY SCRAPER  (aqi.in — Bangalore)
+# ══════════════════════════════════════════════════════════════════════════════
+
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    _SCRAPER_AVAILABLE = True
+except ImportError:
+    _SCRAPER_AVAILABLE = False
+    print("[WARN] requests / beautifulsoup4 not installed. "
+          "Install with: pip install requests beautifulsoup4\n"
+          "Falling back to Google Sheet air_quality data.")
+
+_LIVE_AQI_CACHE = {"aqi": None, "humidity": None, "fetched_at": None}
+_LIVE_AQI_LOCK  = threading.Lock()
+
+_AQI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _parse_first_number(text):
+    """Return first integer found in text, or None."""
+    m = re.search(r"\d+", str(text))
+    return int(m.group()) if m else None
+
+
+def _scrape_aqi_in():
+    """
+    Scrape live AQI and humidity for Bangalore from aqi.in.
+    Returns (aqi_int_or_None, humidity_int_or_None).
+    """
+    aqi_val = None
+    hum_val = None
+
+    if not _SCRAPER_AVAILABLE:
+        return aqi_val, hum_val
+
+    # ── 1. AQI page ──────────────────────────────────────────────────────────
+    try:
+        resp = requests.get(
+            "https://www.aqi.in/in/dashboard/india/karnataka/bangalore",
+            headers=_AQI_HEADERS,
+            timeout=12,
+        )
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Strategy A: look for the large AQI number in a known class pattern
+            # aqi.in renders a big number with class containing "aqi-value", "liveAqi", etc.
+            for selector in [
+                "[class*='liveAqi']",
+                "[class*='aqi-value']",
+                "[class*='AqiValue']",
+                "[class*='aqiValue']",
+                "[class*='live-aqi']",
+            ]:
+                el = soup.select_one(selector)
+                if el:
+                    val = _parse_first_number(el.get_text())
+                    if val and 1 <= val <= 500:
+                        aqi_val = val
+                        break
+
+            # Strategy B: scan <script> tags for JSON-like AQI field
+            if aqi_val is None:
+                for script in soup.find_all("script"):
+                    txt = script.string or ""
+                    # e.g. "aqi":122 or "aqiValue":135
+                    m = re.search(r'"aqi(?:Value)?"\s*:\s*(\d+)', txt, re.I)
+                    if m:
+                        val = int(m.group(1))
+                        if 1 <= val <= 500:
+                            aqi_val = val
+                            break
+
+            # Strategy C: find the first standalone large number near "AQI" text
+            if aqi_val is None:
+                page_text = soup.get_text(separator=" ")
+                # Look for pattern: "Live AQI  122" or "AQI 135"
+                m = re.search(
+                    r"(?:Live\s+AQI|AQI\s*\(US\)|AQI)\s*[:\-]?\s*(\d{1,3})\b",
+                    page_text, re.I
+                )
+                if m:
+                    val = int(m.group(1))
+                    if 1 <= val <= 500:
+                        aqi_val = val
+
+            # Strategy D: look for humidity on the AQI dashboard page too
+            if hum_val is None:
+                page_text = soup.get_text(separator=" ")
+                m = re.search(
+                    r"[Hh]umidity\s*[:\-]?\s*(\d{1,3})\s*%",
+                    page_text
+                )
+                if m:
+                    val = int(m.group(1))
+                    if 0 <= val <= 100:
+                        hum_val = val
+
+    except Exception as e:
+        print(f"[WARN] AQI page scrape failed: {e}")
+
+    # ── 2. Weather page (for humidity if not yet found) ───────────────────────
+    if hum_val is None:
+        try:
+            resp2 = requests.get(
+                "https://www.aqi.in/weather/in/india/karnataka/bangalore",
+                headers=_AQI_HEADERS,
+                timeout=12,
+            )
+            if resp2.status_code == 200:
+                soup2 = BeautifulSoup(resp2.text, "html.parser")
+
+                # Strategy A: class-based selector
+                for selector in [
+                    "[class*='humidity']",
+                    "[class*='Humidity']",
+                ]:
+                    el = soup2.select_one(selector)
+                    if el:
+                        val = _parse_first_number(el.get_text())
+                        if val and 0 <= val <= 100:
+                            hum_val = val
+                            break
+
+                # Strategy B: scan scripts
+                if hum_val is None:
+                    for script in soup2.find_all("script"):
+                        txt = script.string or ""
+                        m = re.search(r'"humidity"\s*:\s*(\d+)', txt, re.I)
+                        if m:
+                            val = int(m.group(1))
+                            if 0 <= val <= 100:
+                                hum_val = val
+                                break
+
+                # Strategy C: text pattern
+                if hum_val is None:
+                    page_text2 = soup2.get_text(separator=" ")
+                    m = re.search(
+                        r"[Hh]umidity\s*[:\-]?\s*(\d{1,3})\s*%",
+                        page_text2
+                    )
+                    if m:
+                        val = int(m.group(1))
+                        if 0 <= val <= 100:
+                            hum_val = val
+
+                # Strategy D: also grab AQI from weather page if still missing
+                if aqi_val is None:
+                    page_text2 = soup2.get_text(separator=" ")
+                    m = re.search(r"\bAQI\b\s*[:\-]?\s*(\d{1,3})\b", page_text2)
+                    if m:
+                        val = int(m.group(1))
+                        if 1 <= val <= 500:
+                            aqi_val = val
+
+        except Exception as e:
+            print(f"[WARN] Weather page scrape failed: {e}")
+
+    return aqi_val, hum_val
+
+
+def fetch_live_aqi_humidity(force=False):
+    """
+    Return (aqi_str, humidity_str) from live scrape.
+    Results are cached for 10 minutes unless force=True.
+    Returns (None, None) on failure so callers can fall back to sheet data.
+    """
+    global _LIVE_AQI_CACHE
+
+    with _LIVE_AQI_LOCK:
+        now = time.time()
+        cache_age = now - (_LIVE_AQI_CACHE["fetched_at"] or 0)
+        if not force and _LIVE_AQI_CACHE["fetched_at"] and cache_age < 600:
+            return _LIVE_AQI_CACHE["aqi"], _LIVE_AQI_CACHE["humidity"]
+
+        print("[INFO] Fetching live AQI/humidity from aqi.in …")
+        aqi_val, hum_val = _scrape_aqi_in()
+
+        _LIVE_AQI_CACHE["aqi"]        = str(aqi_val)  if aqi_val  is not None else None
+        _LIVE_AQI_CACHE["humidity"]   = str(hum_val)  if hum_val  is not None else None
+        _LIVE_AQI_CACHE["fetched_at"] = now
+
+        if aqi_val is not None:
+            print(f"[INFO] Live AQI={aqi_val}  Humidity={hum_val}")
+        else:
+            print("[WARN] Live AQI scrape returned no value — will use sheet data.")
+
+        return _LIVE_AQI_CACHE["aqi"], _LIVE_AQI_CACHE["humidity"]
+
+
+# Pre-warm the cache at startup (non-blocking)
+def _warm_cache():
+    try:
+        fetch_live_aqi_humidity(force=True)
+    except Exception:
+        pass
+
+threading.Thread(target=_warm_cache, daemon=True).start()
+
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "One Health Dashboard — Bettahalasuru"
@@ -697,17 +911,42 @@ def fmt_num(val, default="—"):
         return default
 
 
-def _extract_header_values(data):
-    aqi_str = "—"
-    aq = data.get("air_quality", pd.DataFrame())
+# ══════════════════════════════════════════════════════════════════════════════
+# LIVE AQI HELPER — used by all page renderers and the header
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_live_aqi_humidity(d):
+    """
+    Returns (aqi_str, humidity_str).
+    Tries live scrape first; falls back to Google Sheet air_quality tab data.
+    """
+    live_aqi, live_hum = fetch_live_aqi_humidity()
+
+    # ── Sheet fallback values ────────────────────────────────────────────────
+    sheet_aqi = "—"
+    sheet_hum = "—"
+    aq = d.get("air_quality", pd.DataFrame())
     aq_param_col = find_col(aq, ["parameter", "param", "metric"])
     aq_value_col = find_col(aq, ["value", "reading", "measurement"])
     if aq_param_col and aq_value_col and not aq.empty:
-        aqi_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper() == "AQI"]
-        if not aqi_rows.empty:
-            vals = pd.to_numeric(aqi_rows[aq_value_col], errors="coerce").dropna()
-            if not vals.empty:
-                aqi_str = str(int(round(vals.mean())))
+        for _, aq_row in aq.iterrows():
+            p = str(aq_row[aq_param_col]).strip().upper()
+            v = aq_row[aq_value_col]
+            parsed = pd.to_numeric(v, errors="coerce")
+            if p == "AQI" and pd.notna(parsed):
+                sheet_aqi = str(int(round(float(parsed))))
+            elif p in ("HUMIDITY", "RH", "RELATIVE HUMIDITY", "AMBIENT HUMIDITY") and pd.notna(parsed):
+                sheet_hum = fmt_num(round(float(parsed), 1))
+
+    aqi_str = live_aqi  if live_aqi  is not None else sheet_aqi
+    hum_str = live_hum  if live_hum  is not None else sheet_hum
+
+    return aqi_str, hum_str
+
+
+def _extract_header_values(data):
+    """Used to initialise the header bar with AQI + population."""
+    aqi_str, _ = get_live_aqi_humidity(data)
 
     pop_str = "—"
     kpi_df = data.get("kpi_data", pd.DataFrame())
@@ -781,26 +1020,10 @@ def _get_overview_kpis(d):
         default="—"
     )
 
-    aq = d.get("air_quality", pd.DataFrame())
-    aq_param_col = find_col(aq, ["parameter", "param", "metric", "field"])
-    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
-    kpis["aqi"] = "—"
-    if aq_param_col and aq_value_col and not aq.empty:
-        aqi_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper() == "AQI"]
-        if not aqi_rows.empty:
-            vals = pd.to_numeric(aqi_rows[aq_value_col], errors="coerce").dropna()
-            if not vals.empty:
-                kpis["aqi"] = fmt_num(round(vals.mean()))
-
-    kpis["humidity"] = "—"
-    if aq_param_col and aq_value_col and not aq.empty:
-        hum_rows = aq[aq[aq_param_col].astype(str).str.strip().str.upper().isin(
-            ["HUMIDITY", "RH", "RELATIVE HUMIDITY", "AMBIENT HUMIDITY"]
-        )]
-        if not hum_rows.empty:
-            vals = pd.to_numeric(hum_rows[aq_value_col], errors="coerce").dropna()
-            if not vals.empty:
-                kpis["humidity"] = fmt_num(round(vals.mean(), 1))
+    # ── AQI and humidity from LIVE scrape (with sheet fallback) ─────────────
+    live_aqi, live_hum = get_live_aqi_humidity(d)
+    kpis["aqi"]      = live_aqi if live_aqi  not in (None, "—") else "—"
+    kpis["humidity"] = live_hum if live_hum  not in (None, "—") else "—"
 
     wq = d.get("final_waterQuality_complete", pd.DataFrame())
     kpis["water_sources"] = "—"
@@ -1081,8 +1304,8 @@ def page_overview(d):
             kpi_card("Stray Dogs",        kpis["stray_dogs"],    "",          "Village population",         "amber"),
             kpi_card("ABC Programme",     kpis["abc_count"],     "animals",   "Neutered + anti-rabies",     "red"),
             kpi_card("Avian Species",     kpis["avian"],         "species",   "Observed in area",           "purple"),
-            kpi_card("AQI",               kpis["aqi"],           "",          "Avg — air quality index",    "amber"),
-            kpi_card("Humidity",          kpis["humidity"],      "%",         "Ambient avg reading",        "blue"),
+            kpi_card("AQI",               kpis["aqi"],           "",          "Live — Bangalore air quality","amber"),
+            kpi_card("Humidity",          kpis["humidity"],      "%",         "Live — Bangalore weather",   "blue"),
             kpi_card("Water Sources",     kpis["water_sources"], "tested",    "Village + lake combined",    "red"),
         ], style={"display": "grid", "gridTemplateColumns": "repeat(8,1fr)", "gap": "12px", "marginBottom": "20px"}),
 
@@ -1126,11 +1349,6 @@ def page_overview(d):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _parse_disease_insights(di_df):
-    """
-    Parses the disease_insights tab which has columns:
-        disease | metric | value | notes
-    Returns a dict: { "malaria": {"value": "30-50", "notes": "Peak during monsoon..."}, ... }
-    """
     result = {}
     if di_df is None or di_df.empty:
         return result
@@ -1163,11 +1381,10 @@ def _parse_disease_insights(di_df):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HUMAN PAGE — Redesigned (premium analytics dashboard style)
+# HUMAN PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 
 def page_human(d):
-    # ── raw data frames ────────────────────────────────────────────────────
     md  = d.get("majorDiseases",        pd.DataFrame())
     vt  = d.get("vectorDiseaseTrend",   pd.DataFrame())
     db  = d.get("diseaseBurden",        pd.DataFrame())
@@ -1175,10 +1392,6 @@ def page_human(d):
     vi  = d.get("vectorInsights",       pd.DataFrame())
     kpi = d.get("kpi_data",             pd.DataFrame())
     di  = d.get("disease_insights",     pd.DataFrame())
-
-    # ══════════════════════════════════════════════════════════════════════
-    # A.  KPI EXTRACTION
-    # ══════════════════════════════════════════════════════════════════════
 
     h_population = kpi_val_from_wide(
         kpi,
@@ -1215,34 +1428,24 @@ def page_human(d):
     if h_phc_services is None:
         h_phc_services = kpi_val(kpi, ["PHC Services", "Screening Programs", "Services"], "8+")
 
-    # ══════════════════════════════════════════════════════════════════════
-    # B.  VECTOR INSIGHTS — read dynamically from disease_insights tab
-    #     Columns: disease | metric | value | notes
-    # ══════════════════════════════════════════════════════════════════════
-
     di_parsed = _parse_disease_insights(di)
 
-    # Malaria
     malaria_data        = di_parsed.get("malaria", {})
     malaria_cases       = malaria_data.get("value",  "30–50/yr")
     malaria_insight     = malaria_data.get("notes",  "Peak during monsoon. RDT used at PHC.")
 
-    # Dengue
     dengue_data         = di_parsed.get("dengue", {})
     dengue_cases        = dengue_data.get("value",   "60 cases")
     dengue_insight      = dengue_data.get("notes",   "2022 spike — high rainfall, standing water.")
 
-    # Chikungunya
     chikungunya_data    = di_parsed.get("chikungunya", {})
     chikungunya_cases   = chikungunya_data.get("value",  "10–25/yr")
     chikungunya_insight = chikungunya_data.get("notes",  "Sporadic post-monsoon. Nets distributed.")
 
-    # Rainfall
     rainfall_data       = di_parsed.get("rainfall", {})
     rainfall_val        = rainfall_data.get("value",   "High correlation")
     rainfall_insight    = rainfall_data.get("notes",   "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)")
 
-    # If value is empty, fall back to vectorInsights sheet for backward compat
     vi_disease_col = find_col(vi, ["disease", "Disease", "diseaseName", "disease_name"])
     vi_cases_col   = find_col(vi, ["casesRange", "cases_range", "cases", "caseRange",
                                    "Cases", "range", "value"])
@@ -1289,10 +1492,6 @@ def page_human(d):
             "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)"
         )
 
-    # ══════════════════════════════════════════════════════════════════════
-    # C.  DISEASE BURDEN
-    # ══════════════════════════════════════════════════════════════════════
-
     db_cat_col = find_col(db, ["diseaseCategory", "disease_category", "disease", "category"])
     db_val_col = find_col(db, ["value", "score", "severity"])
     db_sub_col = find_col(db, ["sublabel", "sub_label", "description", "note"])
@@ -1321,10 +1520,6 @@ def page_human(d):
     db_den_pct,  db_den_sub  = get_db("dengue",          48, "Cases — peak season")
     db_lep_pct,  db_lep_sub  = get_db("leptospirosis",   18, "Monsoon linked")
 
-    # ══════════════════════════════════════════════════════════════════════
-    # D.  PHC SCREENING TABLE
-    # ══════════════════════════════════════════════════════════════════════
-
     badge_map_bg   = {"Active": "good", "Seasonal": "warn", "Periodic": "info"}
     screening_rows = []
     if not sc.empty:
@@ -1335,11 +1530,6 @@ def page_human(d):
                 (badge(row.get("status", ""),
                        badge_map_bg.get(row.get("status", ""), "info")), 1),
             ])
-
-    # ══════════════════════════════════════════════════════════════════════
-    # E.  DISEASE INSIGHT ROWS (from disease_insights if it has insight_text col,
-    #     otherwise skip — we already use it above for vector KPIs)
-    # ══════════════════════════════════════════════════════════════════════
 
     di_text_col  = find_col(di, ["insight_text", "insight", "finding", "text"])
     di_color_col = find_col(di, ["color_key", "color", "pillar"])
@@ -1356,29 +1546,20 @@ def page_human(d):
             )
             disease_insight_rows.append(insight_row(txt, color_lk.get(c_key, C_BLUE)))
 
-    # ══════════════════════════════════════════════════════════════════════
-    # F.  CHART 1 — Major Diseases bar chart
-    #     DATA SOURCE: majorDiseases tab — columns: disease, cases
-    #     This is a TALL table. Columns are exactly "disease" and "cases".
-    # ══════════════════════════════════════════════════════════════════════
-
     print(f"[DEBUG] majorDiseases shape: {md.shape}, columns: {list(md.columns)}")
     if not md.empty:
         print(md.head())
 
-    # Try broad column name detection for disease name and value
     dis_col  = find_col(md, [
         "disease", "Disease", "diseaseName", "disease_name",
         "name", "Name", "category", "Category", "label", "Label"
     ])
-    # FIX: include "cases" as a primary candidate — this is the actual column name
     case_col = find_col(md, [
         "cases", "Cases", "case", "Case",
         "value", "Value", "score", "Score",
         "prevalenceScore", "prevalence_score", "prevalence", "Prevalence",
         "count", "Count", "burden", "Burden"
     ])
-
 
     fig_dis  = empty_fig("No disease case-load data available")
 
@@ -1397,13 +1578,13 @@ def page_human(d):
             for i in range(n):
                 frac = i / max(n - 1, 1)
                 if frac < 0.35:
-                    palette.append("#22c55e")   # green
+                    palette.append("#22c55e")
                 elif frac < 0.65:
-                    palette.append("#f59e0b")   # amber
+                    palette.append("#f59e0b")
                 elif frac < 0.85:
-                    palette.append("#f97316")   # orange
+                    palette.append("#f97316")
                 else:
-                    palette.append("#ef4444")   # red
+                    palette.append("#ef4444")
 
             fig_dis = go.Figure()
             fig_dis.add_trace(go.Bar(
@@ -1471,10 +1652,6 @@ def page_human(d):
     else:
         print(f"[WARN] majorDiseases: could not find disease or cases columns. Available: {list(md.columns)}")
 
-    # ══════════════════════════════════════════════════════════════════════
-    # G.  CHART 2 — Vector Trend (smooth spline + light area fills)
-    # ══════════════════════════════════════════════════════════════════════
-
     year_col = find_col(vt, ["year", "Year"])
     fig_vec  = empty_fig("No vector disease trend data available")
 
@@ -1525,13 +1702,7 @@ def page_human(d):
                 margin=dict(l=20, r=20, t=64, b=20),
             ))
 
-    # ══════════════════════════════════════════════════════════════════════
-    # LAYOUT ASSEMBLY
-    # ══════════════════════════════════════════════════════════════════════
-
     header = section_banner("Human Pillar", "PRIMARY HEALTH CENTRE · BETTAHALASURU")
-
-    # ── 2.  TOP KPI ROW (2 cards) ─────────────────────────────────────────
 
     population_card = html.Div([
         card_top_bar(C_BLUE),
@@ -1545,7 +1716,6 @@ def page_human(d):
             "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
             "letterSpacing": "-2px", "marginBottom": "14px",
         }),
-        # Male / Female sub-badges
         html.Div([
             html.Div([
                 html.Span("♂ MALE", style={
@@ -1639,10 +1809,7 @@ def page_human(d):
         style={"display": "flex", "gap": "20px", "marginBottom": "28px"},
     )
 
-    # ── 3.  CLUSTERED VECTOR KPI SECTION ──────────────────────────────────
-
     VECTOR_DEFS = [
-        # icon   title            color     value_str         insight_str
         ("🦟", "MALARIA",       C_BLUE,   malaria_cases,     malaria_insight),
         ("🦟", "DENGUE",        C_RED,    dengue_cases,      dengue_insight),
         ("🦟", "CHIKUNGUNYA",   C_PURPLE, chikungunya_cases, chikungunya_insight),
@@ -1718,7 +1885,6 @@ def page_human(d):
         "boxShadow": "0 2px 16px rgba(0,0,0,0.05)",
     })
 
-    # ── 4.  Charts row ─────────────────────────────────────────────────────
     charts_row = grid2([
         chart_card(
             html.Div([
@@ -1742,7 +1908,6 @@ def page_human(d):
         ),
     ])
 
-    # ── 5.  Disease Burden + PHC Screening ────────────────────
     burden_screening = grid2([
         html.Div([
             card_top_bar(C_BLUE),
@@ -1777,7 +1942,6 @@ def page_human(d):
         ], style=CARD_STYLE),
     ])
 
-    # ── 6.  Insight rows ──────────────────────────────────────────────────
     insights = html.Div(disease_insight_rows) if disease_insight_rows else html.Div([
         insight_row(
             f"{r.get('disease','')}: {r.get('casesRange','')} cases — {r.get('insight','')}",
@@ -2069,12 +2233,6 @@ def page_animal(d):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_calib_content(drug_filter):
-    """
-    Build calibration charts + metric cards for the given drug_filter.
-    drug_filter: "overlay" | "doxy" | "amox"
-    Reads directly from DATA (always live).
-    Returns (charts_div, metrics_div).
-    """
     doxy_raw = DATA.get("Doxy_Calibration", pd.DataFrame())
     amox_raw = DATA.get("Amox_Calibration", pd.DataFrame())
 
@@ -2130,7 +2288,6 @@ def _build_calib_content(drug_filter):
         pass_df  = grp[grp["_qc_pass"]].copy()
         fail_df  = grp[~grp["_qc_pass"]].copy()
 
-        # ── QC-pass scatter ──────────────────────────────────────────────
         if not pass_df.empty:
             fig_curve.add_trace(go.Scatter(
                 x=pass_df["_expected"], y=pass_df["_peak"],
@@ -2145,7 +2302,6 @@ def _build_calib_content(drug_filter):
                 ),
             ))
 
-        # ── QC-fail scatter ───────────────────────────────────────────────
         if not fail_df.empty:
             fig_curve.add_trace(go.Scatter(
                 x=fail_df["_expected"], y=fail_df["_peak"],
@@ -2161,7 +2317,6 @@ def _build_calib_content(drug_filter):
                 ),
             ))
 
-        # ── Regression on QC-pass only ────────────────────────────────────
         r2_val = None
         if len(pass_df) >= 2:
             x_p = pass_df["_expected"].values.astype(float)
@@ -2183,7 +2338,6 @@ def _build_calib_content(drug_filter):
             except Exception:
                 pass
 
-        # ── Ideal reference line  y = x ───────────────────────────────────
         ref_df = grp.dropna(subset=["_expected", "_final"]).sort_values("_expected")
         if not ref_df.empty:
             fig_curve.add_trace(go.Scatter(
@@ -2194,7 +2348,6 @@ def _build_calib_content(drug_filter):
                 hoverinfo="skip",
             ))
 
-        # ── Accuracy bar chart ────────────────────────────────────────────
         acc_df = grp.dropna(subset=["_expected", "_accuracy"]).sort_values("_expected")
         if not acc_df.empty:
             bar_colors = [color if p else C_RED for p in acc_df["_qc_pass"]]
@@ -2214,7 +2367,6 @@ def _build_calib_content(drug_filter):
             "pass":  len(pass_df),
         })
 
-    # ── QC band on accuracy chart ─────────────────────────────────────────
     fig_accuracy.add_hrect(
         y0=80, y1=120,
         fillcolor=rgba(C_GREEN, 0.08), line_width=0,
@@ -2224,13 +2376,11 @@ def _build_calib_content(drug_filter):
     fig_accuracy.add_hline(y=80,  line_dash="dot", line_color=C_GREEN, line_width=1.2)
     fig_accuracy.add_hline(y=120, line_dash="dot", line_color=C_GREEN, line_width=1.2)
 
-    # ── Layout (PL handles legend; no duplicate legend arg) ───────────────
     fig_curve.update_layout(**PL(
         "Calibration Curve — Peak Area vs Expected Conc",
         xaxis_title="Expected Conc (ng/mL)",
         yaxis_title="Peak Area",
     ))
-    # Separate update_layout for any extra axis tweaks
     fig_curve.update_xaxes(zeroline=False)
 
     fig_accuracy.update_layout(**PL(
@@ -2246,7 +2396,6 @@ def _build_calib_content(drug_filter):
         chart_card(dcc.Graph(figure=fig_accuracy, config={"displayModeBar": False}), "green"),
     ])
 
-    # ── Metric cards ──────────────────────────────────────────────────────
     mc = []
     for m in metric_list:
         r2_str = f"{m['r2']:.4f}" if m["r2"] is not None else "N/A"
@@ -2274,7 +2423,6 @@ def page_environment(d):
     lc  = d.get("lake_water_cfu",      pd.DataFrame())
     gsd = d.get("gram_staining_data",  pd.DataFrame())
     mc  = d.get("microbial_analysis",  pd.DataFrame())
-    aq  = d.get("air_quality",         pd.DataFrame())
     sc  = d.get("soil_cfu",            pd.DataFrame())
     pv  = d.get("physiochem_village_waterquality", pd.DataFrame())
 
@@ -2286,22 +2434,15 @@ def page_environment(d):
     cocci_pct      = gs["cocci_pct"]
     mucoid_pct     = gs["mucoid_pct"]
 
-    aqi_val      = 135
-    humidity_val = "—"
-    aq_param_col = find_col(aq, ["parameter", "param", "metric"])
-    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
-    if aq_param_col and aq_value_col and not aq.empty:
-        for _, aq_row in aq.iterrows():
-            p = str(aq_row[aq_param_col]).strip().upper()
-            v = aq_row[aq_value_col]
-            if p == "AQI":
-                parsed = pd.to_numeric(v, errors="coerce")
-                if pd.notna(parsed):
-                    aqi_val = parsed
-            elif p in ("HUMIDITY", "RH", "RELATIVE HUMIDITY"):
-                parsed = pd.to_numeric(v, errors="coerce")
-                if pd.notna(parsed):
-                    humidity_val = fmt_num(parsed)
+    # ── AQI and humidity from LIVE scrape (with sheet fallback) ──────────────
+    live_aqi_str, live_hum_str = get_live_aqi_humidity(d)
+
+    try:
+        aqi_val = float(live_aqi_str) if live_aqi_str not in (None, "—") else 135
+    except (TypeError, ValueError):
+        aqi_val = 135
+
+    humidity_val = live_hum_str if live_hum_str not in (None, "—") else "—"
 
     effluent_tds = "—"
     wq_source_col_e = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
@@ -2435,7 +2576,6 @@ def page_environment(d):
     fig_lc.update_layout(**PL("Lake Entry Points — Mean Bacterial CFU/mL", yaxis_title="CFU/mL"))
     fig_lc.update_xaxes(tickangle=-25)
 
-    # ── Soil Microbial Load — Grouped Bar Chart (from soil_data) ─────────────
     soil_data_df = d.get("soil_data", pd.DataFrame())
     fig_soil = empty_fig("No soil data available")
 
@@ -2452,15 +2592,10 @@ def page_environment(d):
             ).copy()
             soil_plot = soil_plot.dropna(subset=[site_col])
 
-            # Fixed site labels in display order
-            # Use actual site names (dynamic)
             sites = soil_plot[site_col].astype(str).tolist()
-
-            # Limit to max 3 sites
             n = min(len(soil_plot), 3)
             x_labels = sites[:n]
 
-            # Extract values WITHOUT scaling
             na2_vals = pd.to_numeric(soil_plot[na2_col], errors="coerce").fillna(0).values[:n]
             na6_vals = pd.to_numeric(soil_plot[na6_col], errors="coerce").fillna(0).values[:n]
             emb_vals = pd.to_numeric(soil_plot[emb_col], errors="coerce").fillna(0).values[:n]
@@ -2491,7 +2626,6 @@ def page_environment(d):
                 paper_bgcolor="#ffffff",
                 plot_bgcolor="#ffffff",
             ))
-            # Separate update for y-axis range and ticks to avoid duplicate legend arg
             fig_soil.update_yaxes(
                 range=[0, 120],
                 tickvals=[0, 20, 40, 60, 80, 100, 120],
@@ -2509,7 +2643,6 @@ def page_environment(d):
                 )
             )
 
-
     fig_gr = go.Figure()
     gram_pos_pct = max(0.0, 100.0 - gram_neg_pct)
     fig_gr.add_trace(go.Pie(
@@ -2525,7 +2658,7 @@ def page_environment(d):
 
     fig_aqi = go.Figure(go.Indicator(
         mode="gauge+number", value=float(aqi_val),
-        title={"text": "Air Quality Index (AQI)", "font": {"color": C_AMBER, "size": 13}},
+        title={"text": "Air Quality Index (AQI) — Live Bangalore", "font": {"color": C_AMBER, "size": 13}},
         number={"font": {"color": C_AMBER, "size": 40}},
         gauge=dict(
             axis=dict(range=[0, 200], tickcolor=MUTED, tickfont_color=MUTED),
@@ -2613,15 +2746,14 @@ def page_environment(d):
                 (badge(status, "bad" if status == "High" else "warn"), 1),
             ])
 
-    # ── Calibration: pre-build initial content (overlay) ─────────────────────
     _calib_charts_init, _calib_metrics_init = _build_calib_content("overlay")
 
     return html.Div([
         section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY · CALIBRATION"),
 
         grid4([
-            kpi_card("AQI Level",              fmt_num(aqi_val), "",    "Unhealthy for sensitive groups",     "amber"),
-            kpi_card("Humidity",               humidity_val,     "%",   "Respiratory risk assessment",        "blue"),
+            kpi_card("AQI Level",              fmt_num(aqi_val), "",    "Live — Bangalore air quality",       "amber"),
+            kpi_card("Humidity",               humidity_val,     "%",   "Live — Bangalore weather",           "blue"),
             kpi_card("Effluent TDS (Sample 1)", effluent_tds,    "ppm", "S1 Effluent Household — WHO lim 500","red"),
             kpi_card("Gram –ve Isolates",      f"{gram_neg_count}/{total_isolates}", "",
                      f"{gram_neg_pct:.1f}% Gram-negative of {total_isolates} isolates", "purple"),
@@ -2654,12 +2786,10 @@ def page_environment(d):
             chart_card(dcc.Graph(figure=fig_aqi,  config={"displayModeBar": False}), "amber"),
         ]),
 
-        # ── Gram staining — full width (gram morph removed) ───────────────
         html.Div([
             chart_card(dcc.Graph(figure=fig_gr, config={"displayModeBar": False}), "red", span=1),
         ], style={"marginBottom": "24px"}),
 
-        # ── Calibration Dashboard ─────────────────────────────────────────
         html.Div([
             card_top_bar(C_BLUE),
             html.Div(style={"height": "6px"}),
@@ -2765,26 +2895,17 @@ def page_interconnections(d):
     ints = d.get("interactionStrength",  pd.DataFrame())
     rm   = d.get("riskMatrix",           pd.DataFrame())
     cp   = d.get("crossPillarIndex",     pd.DataFrame())
-    aq   = d.get("air_quality",          pd.DataFrame())
     wq   = d.get("water_quality",        pd.DataFrame())
 
-    aqi_val = "—"
-    humidity_val = "—"
+    # ── AQI and humidity from LIVE scrape ────────────────────────────────────
+    live_aqi_str, live_hum_str = get_live_aqi_humidity(d)
+    try:
+        aqi_val = float(live_aqi_str) if live_aqi_str not in (None, "—") else "—"
+    except (TypeError, ValueError):
+        aqi_val = "—"
+    humidity_val = live_hum_str if live_hum_str not in (None, "—") else "—"
+
     effluent_tds = "—"
-
-    aq_param_col = find_col(aq, ["parameter", "param", "metric"])
-    aq_value_col = find_col(aq, ["value", "reading", "measurement"])
-    if aq_param_col and aq_value_col and not aq.empty:
-        for _, aq_row in aq.iterrows():
-            p = str(aq_row[aq_param_col]).strip().upper()
-            v = pd.to_numeric(aq_row[aq_value_col], errors="coerce")
-            if pd.isna(v):
-                continue
-            if p == "AQI":
-                aqi_val = v
-            elif p in ("HUMIDITY", "RH", "RELATIVE HUMIDITY"):
-                humidity_val = fmt_num(v)
-
     wq_source_col = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
     wq_tds_col = find_col(wq, ["TDS_ppm", "TDS", "tds"])
     if wq_source_col and wq_tds_col and not wq.empty:
@@ -3207,6 +3328,13 @@ app.layout = html.Div([
 def refresh_data(n_intervals, n_clicks):
     global DATA
     DATA = load_all()
+
+    # Force-refresh the live AQI cache when the user clicks Refresh
+    from dash import ctx as dash_ctx
+    triggered = dash_ctx.triggered_id if dash_ctx.triggered_id else ""
+    force = (triggered == "manual-refresh-btn")
+    fetch_live_aqi_humidity(force=force)
+
     ts = datetime.now().strftime("%d %b %Y %H:%M:%S")
     aqi_str, pop_str = _extract_header_values(DATA)
     aqi_content = ["AQI ", html.Span(aqi_str, style={"color": C_AMBER, "fontWeight": "600"})]
@@ -3237,7 +3365,6 @@ def render_page(tab, _ts):
     Input("calib-toggle",   "value"),
 )
 def update_calibration(drug_filter):
-    """Update calibration charts when the drug toggle changes."""
     if not drug_filter:
         drug_filter = "overlay"
     charts_div, metrics_div = _build_calib_content(drug_filter)
