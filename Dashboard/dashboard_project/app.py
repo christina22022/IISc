@@ -3,6 +3,7 @@ from dash import html, dcc, Input, Output
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime
 
@@ -210,8 +211,6 @@ def parse_gram_staining(d):
     }
 
     if not gt.empty:
-        print(f"[DEBUG] gram_staining_total columns: {list(gt.columns)}")
-        print(f"[DEBUG] gram_staining_total head:\n{gt.head(2)}")
 
         ti_col   = find_col(gt, ["total_isolates", "totalIsolates", "total isolates", "isolates"])
         gnp_col  = find_col(gt, ["gram_negative_percent", "gramNegativePercent", "gram negative percent",
@@ -248,7 +247,6 @@ def parse_gram_staining(d):
 
         if ti_col and gnp_col:
             result["gram_neg_count"] = int(round(result["total_isolates"] * result["gram_neg_pct"] / 100))
-            print(f"[DEBUG] gram_staining parsed result (wide): {result}")
             return result
 
         if len(gt.columns) >= 2:
@@ -280,11 +278,9 @@ def parse_gram_staining(d):
 
             if result["total_isolates"] > 0:
                 result["gram_neg_count"] = int(round(result["total_isolates"] * result["gram_neg_pct"] / 100))
-                print(f"[DEBUG] gram_staining parsed result (positional): {result}")
                 return result
 
     if not gsd.empty:
-        print(f"[DEBUG] gram_staining_data columns: {list(gsd.columns)}")
         stain_col = find_col(gsd, ["gram_stain", "gramStain", "stain", "result", "gram stain", "type"])
         total_rows = len(gsd.dropna(how="all"))
         result["total_isolates"] = total_rows
@@ -316,7 +312,6 @@ def parse_gram_staining(d):
             if total_rows > 0:
                 result["mucoid_pct"] = round(muc_count / total_rows * 100, 2)
 
-        print(f"[DEBUG] gram_staining parsed result (from gsd rows): {result}")
 
     return result
 
@@ -354,8 +349,6 @@ def load_all():
                 for col in df.columns:
                     df[col] = df[col].apply(clean_val_md)
                 d[t] = df
-                print(f"[DEBUG] majorDiseases loaded: {list(df.columns)} — {len(df)} rows")
-                print(df.head())
                 continue
 
             # ── For disease_insights: do NOT transpose — tall table
@@ -368,8 +361,7 @@ def load_all():
                 for col in df.columns:
                     df[col] = df[col].apply(clean_val_di)
                 d[t] = df
-                print(f"[DEBUG] disease_insights loaded: {list(df.columns)} — {len(df)} rows")
-                print(df.head())
+                
                 continue
 
             if df.shape[1] == 2:
@@ -1229,7 +1221,6 @@ def page_human(d):
     # ══════════════════════════════════════════════════════════════════════
 
     di_parsed = _parse_disease_insights(di)
-    print(f"[DEBUG] disease_insights parsed: {di_parsed}")
 
     # Malaria
     malaria_data        = di_parsed.get("malaria", {})
@@ -1388,7 +1379,6 @@ def page_human(d):
         "count", "Count", "burden", "Burden"
     ])
 
-    print(f"[DEBUG] majorDiseases dis_col={dis_col}, case_col={case_col}")
 
     fig_dis  = empty_fig("No disease case-load data available")
 
@@ -2074,6 +2064,210 @@ def page_animal(d):
     ])
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CALIBRATION DASHBOARD HELPER
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_calib_content(drug_filter):
+    """
+    Build calibration charts + metric cards for the given drug_filter.
+    drug_filter: "overlay" | "doxy" | "amox"
+    Reads directly from DATA (always live).
+    Returns (charts_div, metrics_div).
+    """
+    doxy_raw = DATA.get("Doxy_Calibration", pd.DataFrame())
+    amox_raw = DATA.get("Amox_Calibration", pd.DataFrame())
+
+    def prep(df, drug_name):
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.copy()
+        expected_col = find_col(df, ["Expected Conc (ng/mL)", "Expected Conc", "expected_conc", "ExpectedConc"])
+        final_col    = find_col(df, ["Final Conc (ng/mL)",   "Final Conc",    "final_conc",    "FinalConc"])
+        accuracy_col = find_col(df, ["Accuracy (%)", "Accuracy", "accuracy"])
+        peak_col     = find_col(df, ["Peak Area", "peak_area", "PeakArea"])
+        sample_col   = find_col(df, ["Sample File", "sample_file", "SampleFile", "sample"])
+        if not all([expected_col, final_col, accuracy_col, peak_col]):
+            return pd.DataFrame()
+        df = coerce_numeric(df, [expected_col, final_col, accuracy_col, peak_col])
+        df = df.dropna(subset=[expected_col, accuracy_col, peak_col])
+        df["_drug"]     = drug_name
+        df["_expected"] = df[expected_col]
+        df["_final"]    = df[final_col]
+        df["_accuracy"] = df[accuracy_col]
+        df["_peak"]     = df[peak_col]
+        df["_sample"]   = df[sample_col].astype(str) if sample_col else "—"
+        df["_qc_pass"]  = (df["_accuracy"] >= 80) & (df["_accuracy"] <= 120)
+        return df
+
+    doxy = prep(doxy_raw, "Doxycycline")
+    amox = prep(amox_raw, "Amoxicillin")
+
+    if drug_filter == "doxy":
+        frames = [doxy] if not doxy.empty else []
+    elif drug_filter == "amox":
+        frames = [amox] if not amox.empty else []
+    else:
+        frames = [df for df in [doxy, amox] if not df.empty]
+
+    if not frames:
+        empty = go.Figure()
+        empty.add_annotation(text="No calibration data available", x=0.5, y=0.5,
+                             xref="paper", yref="paper", showarrow=False, font=dict(size=14))
+        empty.update_layout(**PL("Calibration"))
+        empty_card = chart_card(dcc.Graph(figure=empty, config={"displayModeBar": False}), "blue", span=2)
+        return html.Div([empty_card]), html.Div()
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    DRUG_COLORS = {"Doxycycline": C_BLUE, "Amoxicillin": C_GREEN}
+    fig_curve    = go.Figure()
+    fig_accuracy = go.Figure()
+    metric_list  = []
+
+    for drug, grp in combined.groupby("_drug"):
+        color    = DRUG_COLORS.get(drug, C_BLUE)
+        pass_df  = grp[grp["_qc_pass"]].copy()
+        fail_df  = grp[~grp["_qc_pass"]].copy()
+
+        # ── QC-pass scatter ──────────────────────────────────────────────
+        if not pass_df.empty:
+            fig_curve.add_trace(go.Scatter(
+                x=pass_df["_expected"], y=pass_df["_peak"],
+                mode="markers", name=f"{drug} (pass)",
+                marker=dict(color=color, size=9, line=dict(width=1, color="white")),
+                customdata=pass_df[["_sample", "_expected", "_final", "_accuracy"]].values,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Expected: %{customdata[1]:.2f} ng/mL<br>"
+                    "Final: %{customdata[2]:.2f} ng/mL<br>"
+                    "Accuracy: %{customdata[3]:.1f}%<extra></extra>"
+                ),
+            ))
+
+        # ── QC-fail scatter ───────────────────────────────────────────────
+        if not fail_df.empty:
+            fig_curve.add_trace(go.Scatter(
+                x=fail_df["_expected"], y=fail_df["_peak"],
+                mode="markers", name=f"{drug} (fail)",
+                marker=dict(color=C_RED, size=9, symbol="x",
+                            line=dict(width=2, color=C_RED)),
+                customdata=fail_df[["_sample", "_expected", "_final", "_accuracy"]].values,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Expected: %{customdata[1]:.2f} ng/mL<br>"
+                    "Final: %{customdata[2]:.2f} ng/mL<br>"
+                    "Accuracy: %{customdata[3]:.1f}%<extra></extra>"
+                ),
+            ))
+
+        # ── Regression on QC-pass only ────────────────────────────────────
+        r2_val = None
+        if len(pass_df) >= 2:
+            x_p = pass_df["_expected"].values.astype(float)
+            y_p = pass_df["_peak"].values.astype(float)
+            try:
+                coeffs  = np.polyfit(x_p, y_p, 1)
+                x_line  = np.linspace(x_p.min(), x_p.max(), 300)
+                y_line  = np.polyval(coeffs, x_line)
+                y_pred  = np.polyval(coeffs, x_p)
+                ss_res  = np.sum((y_p - y_pred) ** 2)
+                ss_tot  = np.sum((y_p - y_p.mean()) ** 2)
+                r2_val  = float(1 - ss_res / ss_tot) if ss_tot != 0 else 0.0
+                fig_curve.add_trace(go.Scatter(
+                    x=x_line, y=y_line, mode="lines",
+                    name=f"{drug} fit (R²={r2_val:.4f})",
+                    line=dict(color=color, width=2, dash="dash"),
+                    hoverinfo="skip",
+                ))
+            except Exception:
+                pass
+
+        # ── Ideal reference line  y = x ───────────────────────────────────
+        ref_df = grp.dropna(subset=["_expected", "_final"]).sort_values("_expected")
+        if not ref_df.empty:
+            fig_curve.add_trace(go.Scatter(
+                x=ref_df["_expected"].values,
+                y=ref_df["_final"].values,
+                mode="lines", name=f"{drug} ideal (y=x)",
+                line=dict(color=rgba(color, 0.35), width=1.5, dash="dot"),
+                hoverinfo="skip",
+            ))
+
+        # ── Accuracy bar chart ────────────────────────────────────────────
+        acc_df = grp.dropna(subset=["_expected", "_accuracy"]).sort_values("_expected")
+        if not acc_df.empty:
+            bar_colors = [color if p else C_RED for p in acc_df["_qc_pass"]]
+            fig_accuracy.add_trace(go.Bar(
+                x=[f"{v:.2f}" for v in acc_df["_expected"]],
+                y=acc_df["_accuracy"],
+                name=drug,
+                marker_color=bar_colors,
+                marker_line_width=0,
+                hovertemplate="Expected: %{x} ng/mL<br>Accuracy: %{y:.1f}%<extra></extra>",
+            ))
+
+        metric_list.append({
+            "drug":  drug,
+            "r2":    r2_val,
+            "excl":  len(fail_df),
+            "pass":  len(pass_df),
+        })
+
+    # ── QC band on accuracy chart ─────────────────────────────────────────
+    fig_accuracy.add_hrect(
+        y0=80, y1=120,
+        fillcolor=rgba(C_GREEN, 0.08), line_width=0,
+        annotation_text="QC Pass (80–120%)",
+        annotation_font=dict(color=C_GREEN, size=9),
+    )
+    fig_accuracy.add_hline(y=80,  line_dash="dot", line_color=C_GREEN, line_width=1.2)
+    fig_accuracy.add_hline(y=120, line_dash="dot", line_color=C_GREEN, line_width=1.2)
+
+    # ── Layout (PL handles legend; no duplicate legend arg) ───────────────
+    fig_curve.update_layout(**PL(
+        "Calibration Curve — Peak Area vs Expected Conc",
+        xaxis_title="Expected Conc (ng/mL)",
+        yaxis_title="Peak Area",
+    ))
+    # Separate update_layout for any extra axis tweaks
+    fig_curve.update_xaxes(zeroline=False)
+
+    fig_accuracy.update_layout(**PL(
+        "Accuracy Plot — QC Band 80–120%",
+        barmode="group",
+        xaxis_title="Expected Conc (ng/mL)",
+        yaxis_title="Accuracy (%)",
+    ))
+    fig_accuracy.update_xaxes(tickangle=-30)
+
+    charts_div = grid2([
+        chart_card(dcc.Graph(figure=fig_curve,    config={"displayModeBar": False}), "blue"),
+        chart_card(dcc.Graph(figure=fig_accuracy, config={"displayModeBar": False}), "green"),
+    ])
+
+    # ── Metric cards ──────────────────────────────────────────────────────
+    mc = []
+    for m in metric_list:
+        r2_str = f"{m['r2']:.4f}" if m["r2"] is not None else "N/A"
+        mc += [
+            kpi_card(f"{m['drug']} R²",    r2_str,       "",    "QC-pass regression",        "blue"),
+            kpi_card(f"{m['drug']} Curve", str(m["pass"]), "pts", "QC-pass data points",      "green"),
+            kpi_card(f"{m['drug']} Excl.", str(m["excl"]), "pts", "QC-fail (excluded)",        "red"),
+            kpi_card("QC Range",           "80–120",      "%",   "Fixed acceptance window",   "amber"),
+        ]
+
+    n_cols   = min(len(mc), 8)
+    n_cols   = max(n_cols, 1)
+    metrics_div = html.Div(mc, style={
+        "display": "grid",
+        "gridTemplateColumns": f"repeat({n_cols}, 1fr)",
+        "gap": "12px", "marginBottom": "20px",
+    })
+
+    return charts_div, metrics_div
+
+
 def page_environment(d):
     wq  = d.get("water_quality",       pd.DataFrame())
     vc  = d.get("villagewatercfu",     pd.DataFrame())
@@ -2241,20 +2435,85 @@ def page_environment(d):
     fig_lc.update_layout(**PL("Lake Entry Points — Mean Bacterial CFU/mL", yaxis_title="CFU/mL"))
     fig_lc.update_xaxes(tickangle=-25)
 
-    sc_sample_col = find_col(sc, ["sample", "Sample", "site_name", "location"])
-    sc_mean_col   = find_col(sc, ["mean_cfu", "CFU avg", "CFU_avg"])
-    fig_soil = empty_fig("No soil CFU data available")
-    if sc_sample_col and sc_mean_col:
-        sc_plot = coerce_numeric(sc, [sc_mean_col]).dropna(subset=[sc_sample_col, sc_mean_col]).copy()
-        if not sc_plot.empty:
-            colors = [C_RED, C_BLUE, C_GREEN] * ((len(sc_plot) // 3) + 1)
+    # ── Soil Microbial Load — Grouped Bar Chart (from soil_data) ─────────────
+    soil_data_df = d.get("soil_data", pd.DataFrame())
+    fig_soil = empty_fig("No soil data available")
+
+    if not soil_data_df.empty:
+        site_col   = find_col(soil_data_df, ["site", "name", "location", "site_name"])
+        na2_col    = find_col(soil_data_df, ["na_growth_10_2"])
+        na6_col    = find_col(soil_data_df, ["colony_count_10_6"])
+        emb_col    = find_col(soil_data_df, ["e_coli_present"])
+
+        if site_col and any([na2_col, na6_col, emb_col]):
+            soil_plot = coerce_numeric(
+                soil_data_df,
+                [c for c in [na2_col, na6_col, emb_col] if c]
+            ).copy()
+            soil_plot = soil_plot.dropna(subset=[site_col])
+
+            # Fixed site labels in display order
+            SITE_LABELS = ["SS1 Horse Stable", "SS2 Agriculture", "SS3 Banana Field"]
+            # Use whatever rows exist (up to 3)
+            sites = soil_plot[site_col].astype(str).tolist()
+
+            def _safe_col(df, col, scale, n):
+                if col and col in df.columns:
+                    vals = pd.to_numeric(df[col], errors="coerce").fillna(0).values * scale
+                    return list(vals[:n])
+                return [0] * n
+
+            n = min(len(soil_plot), 3)
+            x_labels = SITE_LABELS[:n]
+
+            na2_vals = _safe_col(soil_plot, na2_col, 3000, n)
+            na6_vals = _safe_col(soil_plot, na6_col, 300,  n)
+            emb_vals = _safe_col(soil_plot, emb_col, 30,   n)
+
             fig_soil = go.Figure()
             fig_soil.add_trace(go.Bar(
-                x=sc_plot[sc_sample_col], y=sc_plot[sc_mean_col],
-                marker_color=colors[:len(sc_plot)], marker_line_width=0,
-                hovertemplate="<b>%{x}</b><br>%{y:.4f} CFU/mL<extra></extra>",
+                x=x_labels, y=na2_vals,
+                name="NA (10⁻²) — Growth",
+                marker_color="#D85A30", marker_line_width=0,
+                hovertemplate="<b>%{x}</b><br>NA (10⁻²): %{y:.1f} (×3000)<extra></extra>",
             ))
-    fig_soil.update_layout(**PL("Soil Microbial Load by Site (CFU/mL)", yaxis_title="CFU/mL"))
+            fig_soil.add_trace(go.Bar(
+                x=x_labels, y=na6_vals,
+                name="NA (10⁻⁶) — Colony Count",
+                marker_color="#7BB3D4", marker_line_width=0,
+                hovertemplate="<b>%{x}</b><br>NA (10⁻⁶): %{y:.1f} (×300)<extra></extra>",
+            ))
+            fig_soil.add_trace(go.Bar(
+                x=x_labels, y=emb_vals,
+                name="EMB — E. coli Indicator",
+                marker_color="#A8D5B5", marker_line_width=0,
+                hovertemplate="<b>%{x}</b><br>EMB: %{y:.1f} (×30)<extra></extra>",
+            ))
+
+            fig_soil.update_layout(**PL(
+                "Soil Microbial Load by Site",
+                barmode="group",
+                paper_bgcolor="#ffffff",
+                plot_bgcolor="#ffffff",
+            ))
+            # Separate update for y-axis range and ticks to avoid duplicate legend arg
+            fig_soil.update_yaxes(
+                range=[0, 120],
+                tickvals=[0, 20, 40, 60, 80, 100, 120],
+                title_text="Scaled Count (arbitrary units)",
+                showgrid=True,
+                gridcolor="rgba(0,0,0,0.08)",
+            )
+            fig_soil.update_xaxes(title_text="Sampling Site")
+            fig_soil.update_layout(
+                legend=dict(
+                    orientation="h", yanchor="top", y=-0.18,
+                    xanchor="center", x=0.5,
+                    font=dict(size=10),
+                    bgcolor="rgba(0,0,0,0)",
+                )
+            )
+
 
     fig_gr = go.Figure()
     gram_pos_pct = max(0.0, 100.0 - gram_neg_pct)
@@ -2359,40 +2618,11 @@ def page_environment(d):
                 (badge(status, "bad" if status == "High" else "warn"), 1),
             ])
 
-    fig_gram_morph = empty_fig("No gram staining morphology data available")
-    if not gsd.empty:
-        stain_col = find_col(gsd, ["gram_stain", "gramStain", "stain", "result", "gram stain", "gram", "type"])
-        morph_col = find_col(gsd, ["morphology", "shape", "colony_morphology", "colony morphology"])
-
-        if stain_col and not gsd.empty:
-            stain_vals = gsd[stain_col].astype(str).str.strip()
-            counts = stain_vals.value_counts()
-            if not counts.empty:
-                bar_colors = []
-                for label in counts.index:
-                    ll = label.lower()
-                    if "neg" in ll:
-                        bar_colors.append(C_RED)
-                    elif "pos" in ll:
-                        bar_colors.append(C_GREEN)
-                    else:
-                        bar_colors.append(C_BLUE)
-                fig_gram_morph = go.Figure()
-                fig_gram_morph.add_trace(go.Bar(
-                    x=counts.index.tolist(),
-                    y=counts.values.tolist(),
-                    marker_color=bar_colors,
-                    marker_line_width=0,
-                    hovertemplate="<b>%{x}</b><br>Count: %{y}<extra></extra>",
-                ))
-                fig_gram_morph.update_layout(**PL(
-                    f"Gram Staining Distribution — {total_isolates} Isolates",
-                    yaxis_title="Isolate Count",
-                    xaxis_title="Stain Result",
-                ))
+    # ── Calibration: pre-build initial content (overlay) ─────────────────────
+    _calib_charts_init, _calib_metrics_init = _build_calib_content("overlay")
 
     return html.Div([
-        section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY"),
+        section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY · CALIBRATION"),
 
         grid4([
             kpi_card("AQI Level",              fmt_num(aqi_val), "",    "Unhealthy for sensitive groups",     "amber"),
@@ -2429,10 +2659,36 @@ def page_environment(d):
             chart_card(dcc.Graph(figure=fig_aqi,  config={"displayModeBar": False}), "amber"),
         ]),
 
-        grid2([
-            chart_card(dcc.Graph(figure=fig_gr,         config={"displayModeBar": False}), "red"),
-            chart_card(dcc.Graph(figure=fig_gram_morph, config={"displayModeBar": False}), "purple"),
-        ]),
+        # ── Gram staining — full width (gram morph removed) ───────────────
+        html.Div([
+            chart_card(dcc.Graph(figure=fig_gr, config={"displayModeBar": False}), "red", span=1),
+        ], style={"marginBottom": "24px"}),
+
+        # ── Calibration Dashboard ─────────────────────────────────────────
+        html.Div([
+            card_top_bar(C_BLUE),
+            html.Div(style={"height": "6px"}),
+            card_title("Antibiotic Calibration Dashboard — Doxycycline & Amoxicillin"),
+            dcc.RadioItems(
+                id="calib-toggle",
+                options=[
+                    {"label": "  Overlay (both drugs)",  "value": "overlay"},
+                    {"label": "  Doxycycline only",      "value": "doxy"},
+                    {"label": "  Amoxicillin only",      "value": "amox"},
+                ],
+                value="overlay",
+                inline=True,
+                inputStyle={"marginRight": "5px"},
+                labelStyle={
+                    "marginRight": "24px", "cursor": "pointer",
+                    "fontSize": "12px", "fontFamily": "'DM Mono',monospace",
+                    "color": MUTED,
+                },
+                style={"marginBottom": "14px"},
+            ),
+            html.Div(id="calib-metrics", children=_calib_metrics_init),
+            html.Div(id="calib-charts",  children=_calib_charts_init),
+        ], style={**CARD_STYLE, "marginBottom": "20px"}),
 
         grid2([
             html.Div([
@@ -2978,6 +3234,19 @@ def render_page(tab, _ts):
         "interconnections": page_interconnections,
     }
     return pages.get(tab, page_overview)(d)
+
+
+@app.callback(
+    Output("calib-charts",  "children"),
+    Output("calib-metrics", "children"),
+    Input("calib-toggle",   "value"),
+)
+def update_calibration(drug_filter):
+    """Update calibration charts when the drug toggle changes."""
+    if not drug_filter:
+        drug_filter = "overlay"
+    charts_div, metrics_div = _build_calib_content(drug_filter)
+    return charts_div, metrics_div
 
 
 if __name__ == "__main__":
