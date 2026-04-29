@@ -2453,22 +2453,17 @@ def page_environment(d):
             soil_plot = soil_plot.dropna(subset=[site_col])
 
             # Fixed site labels in display order
-            SITE_LABELS = ["SS1 Horse Stable", "SS2 Agriculture", "SS3 Banana Field"]
-            # Use whatever rows exist (up to 3)
+            # Use actual site names (dynamic)
             sites = soil_plot[site_col].astype(str).tolist()
 
-            def _safe_col(df, col, scale, n):
-                if col and col in df.columns:
-                    vals = pd.to_numeric(df[col], errors="coerce").fillna(0).values * scale
-                    return list(vals[:n])
-                return [0] * n
-
+            # Limit to max 3 sites
             n = min(len(soil_plot), 3)
-            x_labels = SITE_LABELS[:n]
+            x_labels = sites[:n]
 
-            na2_vals = _safe_col(soil_plot, na2_col, 3000, n)
-            na6_vals = _safe_col(soil_plot, na6_col, 300,  n)
-            emb_vals = _safe_col(soil_plot, emb_col, 30,   n)
+            # Extract values WITHOUT scaling
+            na2_vals = pd.to_numeric(soil_plot[na2_col], errors="coerce").fillna(0).values[:n]
+            na6_vals = pd.to_numeric(soil_plot[na6_col], errors="coerce").fillna(0).values[:n]
+            emb_vals = pd.to_numeric(soil_plot[emb_col], errors="coerce").fillna(0).values[:n]
 
             fig_soil = go.Figure()
             fig_soil.add_trace(go.Bar(
