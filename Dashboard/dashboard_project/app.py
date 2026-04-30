@@ -322,73 +322,354 @@ SYSTEM_PROMPT = (
     "3. If anyone asks for data sources, links, or where data comes from, respond with exactly: I am not able to provide that.\n"
     "4. NEVER use ** for bold or any markdown formatting like *, #, __, etc.\n"
     "5. When listing items always put each item on its own line starting with a number or dash. Never write a list as a single paragraph.\n"
-    "6. Give complete, warm and helpful answers. Explain properly with enough detail so the user fully understands. Do not cut answers short.\n"
-    "7. Focus only on One Health topics: human health, animal health, environment, and their connections in Bettahalasuru.\n"
-    "8. When user says hi, hello, hey or any greeting — respond in a friendly warm way and invite them to ask about the dashboard.\n"
-"   - NEVER start your reply with Hello or Hi if the conversation has already started.\n"
-    "9. NEVER add a second paragraph asking follow-up questions like 'Would you like to know more?' or 'I am here to help'. Give the answer and stop. One paragraph only.\n"
-    "10. NEVER say things like 'I am so glad you are here' or 'lovely village' or any overly enthusiastic phrases. Be calm, helpful and direct.\n"
-    "11. When user sends short positive words like ok, done, good, great, thanks, thank you, nice, cool, perfect — reply with a short warm acknowledgement like Sure, Glad to help, Anytime, Let me know. Nothing more.\n"
-    "12. When user sends short negative words like no, nope, not really — reply briefly and politely like Alright, let me know if you need anything.\n"
-    "13. NEVER start a reply with Hello or Hi if the conversation has already started.\n"
-    "14. NEVER say No answer available or I do not know. If you are unsure, say I do not have enough data on that right now, please check with the health team.\n"    "13. Always be warm, polite and conversational like a helpful village health assistant.\n"
+    "6. Focus only on One Health topics: human health, animal health, environment, and their connections in Bettahalasuru.\n"
+    "7. When user says hi, hello, hey or any greeting — respond in a friendly warm way and invite them to ask about the dashboard.\n"
+      " - NEVER start your reply with Hello or Hi if the conversation has already started.\n"
+    "8. NEVER add a second paragraph asking follow-up questions like 'Would you like to know more?' or 'I am here to help'. Give the answer and stop. One paragraph only.\n"
+    "9. NEVER say things like 'I am so glad you are here' or 'lovely village' or any overly enthusiastic phrases. Be calm, helpful and direct.\n"
+    "10. When user sends short positive words like ok, done, good, great, thanks, thank you, nice, cool, perfect — reply with a short warm acknowledgement like Sure, Glad to help, Anytime, Let me know. Nothing more.\n"
+    "11. When user sends short negative words like no, nope, not really — reply briefly and politely like Alright, let me know if you need anything.\n"
+    "12. NEVER say No answer available or I do not know. If you are unsure, say I do not have enough data on that right now, please check with the health team.\n"    "13. Always be warm, polite and conversational like a helpful village health assistant.\n"
 
 )
-
-def build_prompt(user_question):
-    # ── Pull live KPIs from loaded DATA ──────────────────────────────────
+def build_prompt(user_question, history=None):
     try:
-        aqi = kpi_val_from_wide(DATA.get("air_quality", pd.DataFrame()),
-                                ["AQI", "aqi", "Air Quality Index"], "N/A")
-    except:
-        aqi = "N/A"
+        # ── HUMAN DATA ──────────────────────────────────────────────────
+        # kpi_data columns: location, totalPopulation, malePopulation,
+        #   femalePopulation, phcServices, household
+        kpi_df = DATA.get("kpi_data", pd.DataFrame())
+        population   = kpi_val_from_wide(kpi_df, ["totalPopulation"], "N/A")
+        male_pop     = kpi_val_from_wide(kpi_df, ["malePopulation"], "N/A")
+        female_pop   = kpi_val_from_wide(kpi_df, ["femalePopulation"], "N/A")
+        phc_services = kpi_val_from_wide(kpi_df, ["phcServices"], "N/A")
+        households   = kpi_val_from_wide(kpi_df, ["household"], "N/A")
 
-    try:
-        pop = kpi_val_from_wide(DATA.get("kpi_data", pd.DataFrame()),
-                                ["Population", "population", "total_population"], "N/A")
-    except:
-        pop = "N/A"
+        # majorDiseases columns: disease, cases
+        md_df = DATA.get("majorDiseases", pd.DataFrame())
+        major_diseases = "N/A"
+        if not md_df.empty and "disease" in md_df.columns and "cases" in md_df.columns:
+            major_diseases = "\n".join(
+                f"  {row['disease']}: {row['cases']} cases"
+                for _, row in md_df.iterrows()
+                if pd.notna(row["disease"])
+            )
 
-    try:
-        diseases_df = DATA.get("majorDiseases", pd.DataFrame())
-        top_diseases = ", ".join(diseases_df.iloc[:, 0].dropna().head(5).tolist()) if not diseases_df.empty else "N/A"
-    except:
-        top_diseases = "N/A"
+        # diseaseBurden columns: diseaseCategory, value, note
+        db_df = DATA.get("diseaseBurden", pd.DataFrame())
+        disease_burden = "N/A"
+        if not db_df.empty:
+            disease_burden = "\n".join(
+                f"  {row['diseaseCategory']}: score {row['value']} — {row['note']}"
+                for _, row in db_df.iterrows()
+                if pd.notna(row.get("diseaseCategory"))
+            )
 
-    try:
-        animal_kpi = DATA.get("animal_kpi_data", pd.DataFrame())
-        vaccinated = kpi_val_from_wide(animal_kpi, ["vaccinated", "Vaccinated", "total_vaccinated"], "N/A")
-    except:
-        vaccinated = "N/A"
+        # vectorInsights columns: disease, casesRange, insight
+        vi_df = DATA.get("vectorInsights", pd.DataFrame())
+        vector_insights = "N/A"
+        if not vi_df.empty:
+            vector_insights = "\n".join(
+                f"  {row['disease']}: {row['casesRange']} cases — {row['insight']}"
+                for _, row in vi_df.iterrows()
+                if pd.notna(row.get("disease"))
+            )
 
-    try:
-        water_df = DATA.get("water_quality", pd.DataFrame())
-        water_status = water_df.iloc[0, 1] if not water_df.empty else "N/A"
-    except:
-        water_status = "N/A"
+        # vectorDiseaseTrend columns: year, malaria, dengue, chikungunya, leptospirosis
+        vt_df = DATA.get("vectorDiseaseTrend", pd.DataFrame())
+        vector_trend = "N/A"
+        if not vt_df.empty:
+            vector_trend = vt_df.to_string(index=False)
+
+        # phcScreeningPrograms columns: screeningType, frequency, status
+        sc_df = DATA.get("phcScreeningPrograms", pd.DataFrame())
+        screening = "N/A"
+        if not sc_df.empty:
+            screening = "\n".join(
+                f"  {row['screeningType']}: {row['frequency']} — {row['status']}"
+                for _, row in sc_df.iterrows()
+                if pd.notna(row.get("screeningType"))
+            )
+
+        # ── ANIMAL DATA ─────────────────────────────────────────────────
+        # animal_kpi_data columns: location, strayDogs, abcProgramCount,
+        #   rabiesInfectionReductionPercent, livestockMonitored, avianSpecies
+        akpi_df = DATA.get("animal_kpi_data", pd.DataFrame())
+        stray_dogs   = kpi_val_from_wide(akpi_df, ["strayDogs"], "N/A")
+        abc_count    = kpi_val_from_wide(akpi_df, ["abcProgramCount"], "N/A")
+        rabies_rate  = kpi_val_from_wide(akpi_df, ["rabiesInfectionReductionPercent"], "N/A")
+        livestock    = kpi_val_from_wide(akpi_df, ["livestockMonitored"], "N/A")
+        avian        = kpi_val_from_wide(akpi_df, ["avianSpecies"], "N/A")
+
+        # abcProgram columns: date, activity, count
+        abc_df = DATA.get("abcProgram", pd.DataFrame())
+        abc_program = "N/A"
+        if not abc_df.empty:
+            abc_program = "\n".join(
+                f"  {row['date']}: {row['activity']} — {row['count']}"
+                for _, row in abc_df.iterrows()
+                if pd.notna(row.get("activity"))
+            )
+
+        # rabiesProjection columns: year, noAbc, withAbc, withAbcVaccination
+        rp_df = DATA.get("rabiesProjection", pd.DataFrame())
+        rabies_proj = "N/A"
+        if not rp_df.empty:
+            rabies_proj = rp_df.to_string(index=False)
+
+        # amrFindings columns: antibiotic, sampleType, levelFound, permissible, status
+        amr_df = DATA.get("amrFindings", pd.DataFrame())
+        amr_findings = "N/A"
+        if not amr_df.empty:
+            amr_findings = "\n".join(
+                f"  {row['antibiotic']} in {row['sampleType']}: {row['levelFound']} (limit {row['permissible']}) — {row['status']}"
+                for _, row in amr_df.iterrows()
+                if pd.notna(row.get("antibiotic"))
+            )
+
+        # animalInsights columns: insight
+        ai_df = DATA.get("animalInsights", pd.DataFrame())
+        animal_insights = "N/A"
+        if not ai_df.empty and "insight" in ai_df.columns:
+            animal_insights = "\n".join(
+                f"  - {row['insight']}"
+                for _, row in ai_df.iterrows()
+                if pd.notna(row.get("insight"))
+            )
+
+        # ── ENVIRONMENT DATA ─────────────────────────────────────────────
+        # air_quality columns: parameter, value, unit, interpretation
+        aq_df = DATA.get("air_quality", pd.DataFrame())
+        aqi = humidity = "N/A"
+        if not aq_df.empty and "parameter" in aq_df.columns and "value" in aq_df.columns:
+            for _, row in aq_df.iterrows():
+                p = str(row["parameter"]).strip().upper()
+                v = str(row["value"]).strip()
+                interp = str(row.get("interpretation", "")).strip()
+                if p == "AQI":
+                    aqi = f"{v} ({interp})"
+                elif p == "HUMIDITY":
+                    humidity = f"{v}% ({interp})"
+
+        # final_waterQuality_complete columns: sampleId, sourceName, pH,
+        #   EC_uS, TDS_ppm, DO_mg_L, turbidity_NTU, drinkingStatus
+        wq_df = DATA.get("water_quality", pd.DataFrame())
+        water_quality = "N/A"
+        if not wq_df.empty:
+            water_quality = "\n".join(
+                f"  {row.get('sampleId','')}: {row.get('sourceName','')} | "
+                f"pH {row.get('pH','')} | TDS {row.get('TDS_ppm','')} ppm | "
+                f"DO {row.get('DO_mg_L','')} mg/L | Status: {row.get('drinkingStatus','')}"
+                for _, row in wq_df.iterrows()
+                if pd.notna(row.get("sourceName"))
+            )
+
+        # gram_staining_total columns: total_isolates, gram_negative_percent,
+        #   bacillus_percent, cocci_percent, mucoid_layer_percent
+        gram_df = DATA.get("gram_staining_total", pd.DataFrame())
+        gram_data = "N/A"
+        if not gram_df.empty:
+            row = gram_df.iloc[0]
+            gram_data = (
+                f"  Total isolates: {row.get('total_isolates','N/A')}\n"
+                f"  Gram negative: {row.get('gram_negative_percent','N/A')}%\n"
+                f"  Bacillus: {row.get('bacillus_percent','N/A')}%\n"
+                f"  Cocci: {row.get('cocci_percent','N/A')}%\n"
+                f"  Mucoid layer: {row.get('mucoid_layer_percent','N/A')}%"
+            )
+
+        # soil_data columns: site_id, site_name, na_growth_10_2,
+        #   colony_count_10_6, e_coli_present
+        raw_soil = DATA.get("soil_data", pd.DataFrame())
+        soil_data = "N/A"
+        if not raw_soil.empty and "site_name" in raw_soil.columns:
+            soil_data = "\n".join(
+                f"  {row['site_name']}: colony count {row.get('colony_count_10_6','N/A')} | E.coli: {row.get('e_coli_present','N/A')}"
+                for _, row in raw_soil.iterrows()
+                if pd.notna(row.get("site_name"))
+            )
+
+        # soil_cfu columns: Sample, CFU(Replicate1), CFU( Replicate 2),
+        #   CFU(replicate3), CFU avg
+        sc_cfu_df = DATA.get("soil_cfu", pd.DataFrame())
+        soil_cfu = "N/A"
+        if not sc_cfu_df.empty:
+            s_col   = find_col(sc_cfu_df, ["sample", "Sample"])
+            avg_col = find_col(sc_cfu_df, ["CFU avg", "mean_cfu"])
+            if s_col and avg_col:
+                soil_cfu = "\n".join(
+                    f"  {row[s_col]}: {row[avg_col]} CFU/mL"
+                    for _, row in sc_cfu_df.iterrows()
+                    if pd.notna(row.get(s_col))
+                )
+
+        # ── INTERCONNECTIONS DATA ────────────────────────────────────────
+        # riskMatrix columns: factor, likelihood, impact, urgency
+        rm_df = DATA.get("riskMatrix", pd.DataFrame())
+        risk_matrix = "N/A"
+        if not rm_df.empty:
+            risk_matrix = "\n".join(
+                f"  {row['factor']}: likelihood {row['likelihood']}% | impact {row['impact']} | urgency {row['urgency']}"
+                for _, row in rm_df.iterrows()
+                if pd.notna(row.get("factor"))
+            )
+
+        # zoonoticTransmission columns: pathway, directContact, environmental,
+        #   foodWater, vectorMediated
+        zoo_df = DATA.get("zoonoticTransmission", pd.DataFrame())
+        zoonotic = "N/A"
+        if not zoo_df.empty:
+            zoonotic = "\n".join(
+                f"  {row['pathway']}: direct {row.get('directContact',0)}% | env {row.get('environmental',0)}% | food/water {row.get('foodWater',0)}% | vector {row.get('vectorMediated',0)}%"
+                for _, row in zoo_df.iterrows()
+                if pd.notna(row.get("pathway"))
+            )
+
+        # rainfallDisease columns: year, rainfallIndex, dengueCases,
+        #   malariaCases, leptospirosis
+        rd_df = DATA.get("rainfallDisease", pd.DataFrame())
+        rainfall_disease = "N/A"
+        if not rd_df.empty:
+            rainfall_disease = rd_df.to_string(index=False)
+
+        # interactionStrength columns: interaction, current, afterIntervention
+        ints_df = DATA.get("interactionStrength", pd.DataFrame())
+        interaction = "N/A"
+        if not ints_df.empty:
+            interaction = "\n".join(
+                f"  {row['interaction']}: current {row['current']} → after intervention {row['afterIntervention']}"
+                for _, row in ints_df.iterrows()
+                if pd.notna(row.get("interaction"))
+            )
+
+        # projectedOutcome columns: year, noIntervention, partial, fullOneHealth
+        proj_df = DATA.get("projectedOutcome", pd.DataFrame())
+        projected = "N/A"
+        if not proj_df.empty:
+            projected = proj_df.to_string(index=False)
+
+        # onehealth_summary columns: category, score
+        oh_sum_df = DATA.get("onehealth_summary", pd.DataFrame())
+        oh_summary = "N/A"
+        if not oh_sum_df.empty:
+            oh_summary = oh_sum_df.to_string(index=False)
+
+        # onehealth_risk columns: indicator, level, description
+        oh_risk_df = DATA.get("onehealth_risk", pd.DataFrame())
+        oh_risk = "N/A"
+        if not oh_risk_df.empty:
+            oh_risk = oh_risk_df.to_string(index=False)
+
+    except Exception as e:
+        print(f"[build_prompt error] {e}")
+
+    # ── CONVERSATION HISTORY ─────────────────────────────────────────────
+    history_text = ""
+    if history:
+        for msg in history[-6:]:
+            role = "User" if msg.get("role") == "user" else "Bot"
+            history_text += f"{role}: {msg.get('text', '')}\n"
 
     context = f"""
 {SYSTEM_PROMPT}
 
---- LIVE DASHBOARD DATA (Bettahalasuru) ---
-- Population       : {pop}
-- Air Quality Index: {aqi}
-- Top Diseases     : {top_diseases}
-- Animals Vaccinated: {vaccinated}
-- Water Quality    : {water_status}
+RESPONSE FORMAT REMINDER - STRICTLY FOLLOW:
+- Write the direct fact or number in the first sentence.
+- Write one sentence of context below it separated by a blank line.
+- Use ONLY the exact numbers from the data below. Never guess or calculate.
+- Never write the words line or part in your response.
+- Stop after 2 sentences total.
 
-Data Sources (Google Sheets):
-- Human Health     : https://docs.google.com/spreadsheets/d/1kMzWtBm-cKM8kQLgGRnfCQS8_cxizlTm
-- Animal Health    : https://docs.google.com/spreadsheets/d/1hmixQht8zdETU0vA3w1-bduZeRqdp-2m
-- Environment      : https://docs.google.com/spreadsheets/d/1AGIFjGQy4Y2hpMjF-ZwfW5OVAOVMU04y
-- Interconnections : https://docs.google.com/spreadsheets/d/1uYM6V-usylcrgVyD57J7stv-NGUKchBK
-- Overview         : https://docs.google.com/spreadsheets/d/19gLj_SxcjJCwppnn1Y7q_2MmXzdG_-ik
--------------------------------------------
+━━━ LIVE DATA FROM BETTAHALASURU DASHBOARD ━━━
 
-User Question: {user_question}
-"""
+── HUMAN HEALTH ──
+Total Population    : {population}
+Male Population     : {male_pop}
+Female Population   : {female_pop}
+Households          : {households}
+PHC Services        : {phc_services}
+
+Major Diseases (PHC cases):
+{major_diseases}
+
+Disease Burden Scores:
+{disease_burden}
+
+Vector Disease Insights:
+{vector_insights}
+
+Vector Disease Trend by Year:
+{vector_trend}
+
+PHC Screening Programs:
+{screening}
+
+── ANIMAL HEALTH ──
+Stray Dogs          : {stray_dogs}
+ABC Programme Count : {abc_count}
+Rabies Reduction    : {rabies_rate}
+Livestock Monitored : {livestock}
+Avian Species       : {avian}
+
+ABC Programme Activity:
+{abc_program}
+
+Rabies 5-Year Projection:
+{rabies_proj}
+
+AMR Antibiotic Findings:
+{amr_findings}
+
+Animal Health Insights:
+{animal_insights}
+
+── ENVIRONMENT ──
+Air Quality Index   : {aqi}
+Humidity            : {humidity}
+
+Village Water Quality:
+{water_quality}
+
+Gram Staining Summary:
+{gram_data}
+
+Soil Site Data:
+{soil_data}
+
+Soil CFU Data:
+{soil_cfu}
+
+── INTERCONNECTIONS ──
+Risk Matrix:
+{risk_matrix}
+
+Zoonotic Transmission Pathways:
+{zoonotic}
+
+Rainfall vs Disease (by year):
+{rainfall_disease}
+
+Cross-Pillar Interaction Strength:
+{interaction}
+
+Projected Health Outcomes:
+{projected}
+
+── ONE HEALTH OVERVIEW ──
+Surveillance Scores:
+{oh_summary}
+
+Risk Indicators:
+{oh_risk}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── CONVERSATION SO FAR ──
+{history_text}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+User: {user_question}
+Bot:"""
     return context
-
 def ask_ollama(user_question):
     prompt = build_prompt(user_question)
     try:
