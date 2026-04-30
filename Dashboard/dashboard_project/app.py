@@ -1,5 +1,5 @@
 import dash
-from dash import html, dcc, Input, Output
+from dash import html, dcc, Input, Output, State
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
@@ -196,19 +196,19 @@ def fetch_live_aqi_humidity(force=False):
         if not force and _LIVE_AQI_CACHE["fetched_at"] and cache_age < 600:
             return _LIVE_AQI_CACHE["aqi"], _LIVE_AQI_CACHE["humidity"]
 
-        print("[INFO] Fetching live AQI/humidity from aqi.in …")
+       # print("[INFO] Fetching live AQI/humidity from aqi.in …")
         aqi_val, hum_val = _scrape_aqi_in()
 
         _LIVE_AQI_CACHE["aqi"]        = str(aqi_val)  if aqi_val  is not None else None
         _LIVE_AQI_CACHE["humidity"]   = str(hum_val)  if hum_val  is not None else None
         _LIVE_AQI_CACHE["fetched_at"] = now
 
-        if aqi_val is not None:
-            print(f"[INFO] Live AQI={aqi_val}  Humidity={hum_val}")
-        else:
-            print("[WARN] Live AQI scrape returned no value — will use sheet data.")
+       # if aqi_val is None:
+     #     print(f"[INFO] Live AQI={aqi_val}  Humidity={hum_val}")
+     #   else:
+      #      print("[WARN] Live AQI scrape returned no value — will use sheet data.")
 
-        return _LIVE_AQI_CACHE["aqi"], _LIVE_AQI_CACHE["humidity"]
+       # return _LIVE_AQI_CACHE["aqi"], _LIVE_AQI_CACHE["humidity"]
 
 
 # Pre-warm the cache at startup (non-blocking)
@@ -310,8 +310,113 @@ def fetch(tab_name):
     if not os.path.exists(local_path):
         raise FileNotFoundError(f"Local fallback file not found: {local_path}")
     return pd.read_excel(local_path, sheet_name=tab)
+#────────────────────────────────────────────────────────────────────────────
+#-----------CHAT BOT----------------------------------------------------------------------------------------------------------------------------------------------------
+#────────────────────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = (
+    "You are ONE Health Bot, a friendly and helpful assistant for the One Health Dashboard of Bettahalasuru village, Karnataka.\n"
+    "You were built to help users understand health data about this village in a warm, conversational and informative way.\n"
+    "STRICT RULES - follow these always:\n"
+    "1. NEVER share, mention, or hint at any Google Sheets links, spreadsheet URLs, or data source links.\n"
+    "2. NEVER mention words like Google Sheets, spreadsheet, Excel, dataset, database, data source, sheet, csv, or any technical storage terms.\n"
+    "3. If anyone asks for data sources, links, or where data comes from, respond with exactly: I am not able to provide that.\n"
+    "4. NEVER use ** for bold or any markdown formatting like *, #, __, etc.\n"
+    "5. When listing items always put each item on its own line starting with a number or dash. Never write a list as a single paragraph.\n"
+    "6. Give complete, warm and helpful answers. Explain properly with enough detail so the user fully understands. Do not cut answers short.\n"
+    "7. Focus only on One Health topics: human health, animal health, environment, and their connections in Bettahalasuru.\n"
+    "8. When user says hi, hello, hey or any greeting — respond in a friendly warm way and invite them to ask about the dashboard.\n"
+"   - NEVER start your reply with Hello or Hi if the conversation has already started.\n"
+    "9. NEVER add a second paragraph asking follow-up questions like 'Would you like to know more?' or 'I am here to help'. Give the answer and stop. One paragraph only.\n"
+    "10. NEVER say things like 'I am so glad you are here' or 'lovely village' or any overly enthusiastic phrases. Be calm, helpful and direct.\n"
+    "11. When user sends short positive words like ok, done, good, great, thanks, thank you, nice, cool, perfect — reply with a short warm acknowledgement like Sure, Glad to help, Anytime, Let me know. Nothing more.\n"
+    "12. When user sends short negative words like no, nope, not really — reply briefly and politely like Alright, let me know if you need anything.\n"
+    "13. NEVER start a reply with Hello or Hi if the conversation has already started.\n"
+    "14. NEVER say No answer available or I do not know. If you are unsure, say I do not have enough data on that right now, please check with the health team.\n"    "13. Always be warm, polite and conversational like a helpful village health assistant.\n"
 
+)
 
+def build_prompt(user_question):
+    # ── Pull live KPIs from loaded DATA ──────────────────────────────────
+    try:
+        aqi = kpi_val_from_wide(DATA.get("air_quality", pd.DataFrame()),
+                                ["AQI", "aqi", "Air Quality Index"], "N/A")
+    except:
+        aqi = "N/A"
+
+    try:
+        pop = kpi_val_from_wide(DATA.get("kpi_data", pd.DataFrame()),
+                                ["Population", "population", "total_population"], "N/A")
+    except:
+        pop = "N/A"
+
+    try:
+        diseases_df = DATA.get("majorDiseases", pd.DataFrame())
+        top_diseases = ", ".join(diseases_df.iloc[:, 0].dropna().head(5).tolist()) if not diseases_df.empty else "N/A"
+    except:
+        top_diseases = "N/A"
+
+    try:
+        animal_kpi = DATA.get("animal_kpi_data", pd.DataFrame())
+        vaccinated = kpi_val_from_wide(animal_kpi, ["vaccinated", "Vaccinated", "total_vaccinated"], "N/A")
+    except:
+        vaccinated = "N/A"
+
+    try:
+        water_df = DATA.get("water_quality", pd.DataFrame())
+        water_status = water_df.iloc[0, 1] if not water_df.empty else "N/A"
+    except:
+        water_status = "N/A"
+
+    context = f"""
+{SYSTEM_PROMPT}
+
+--- LIVE DASHBOARD DATA (Bettahalasuru) ---
+- Population       : {pop}
+- Air Quality Index: {aqi}
+- Top Diseases     : {top_diseases}
+- Animals Vaccinated: {vaccinated}
+- Water Quality    : {water_status}
+
+Data Sources (Google Sheets):
+- Human Health     : https://docs.google.com/spreadsheets/d/1kMzWtBm-cKM8kQLgGRnfCQS8_cxizlTm
+- Animal Health    : https://docs.google.com/spreadsheets/d/1hmixQht8zdETU0vA3w1-bduZeRqdp-2m
+- Environment      : https://docs.google.com/spreadsheets/d/1AGIFjGQy4Y2hpMjF-ZwfW5OVAOVMU04y
+- Interconnections : https://docs.google.com/spreadsheets/d/1uYM6V-usylcrgVyD57J7stv-NGUKchBK
+- Overview         : https://docs.google.com/spreadsheets/d/19gLj_SxcjJCwppnn1Y7q_2MmXzdG_-ik
+-------------------------------------------
+
+User Question: {user_question}
+"""
+    return context
+
+def ask_ollama(user_question):
+    prompt = build_prompt(user_question)
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3.2",
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": 200,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                }
+            },
+            timeout=120
+        )
+        return response.json().get("response", "Sorry, I could not get a response.")
+    except requests.exceptions.Timeout:
+        return "⏱️ The model took too long to respond. Please try again with a shorter question."
+    except requests.exceptions.ConnectionError:
+        return "❌ Could not connect to Ollama. Please make sure Ollama is running."
+    except Exception as e:
+        return f"⚠️ Something went wrong: {str(e)}"
+    
+
+#___________________________________________________________________________________________________________________________________________________________________________
+#---------------------------------------------------------------------------------------------------------------------------------------------------------------
 def safe_mean_cfu(df, name_col):
     if df is None or df.empty:
         return pd.DataFrame()
@@ -3194,6 +3299,7 @@ _INIT_AQI, _INIT_POP = _extract_header_values(DATA)
 app.layout = html.Div([
     dcc.Interval(id="refresh-interval", interval=60 * 1000, n_intervals=0),
     dcc.Store(id="data-timestamp", data=""),
+    dcc.Store(id="chat-store", data=[]), #CHAT_BOT
 
     html.Header([
         html.Div([
@@ -3304,13 +3410,165 @@ app.layout = html.Div([
         "background": "#ffffff",
     }),
 
+    # ── AI Chatbot Bot ──────────────────────────────────────────────────────
+    html.Div(id="chatbot-container", children=[
+
+        # Floating toggle button
+        html.Button("💬", id="chat-toggle-btn", n_clicks=0, style={
+            "position": "fixed", "bottom": "30px", "right": "30px",
+            "width": "60px", "height": "60px", "borderRadius": "50%",
+            "background": "linear-gradient(135deg, #0284c7, #0ea5e9)",
+            "color": "white", "border": "none",
+            "fontSize": "26px", "cursor": "pointer", "zIndex": "1000",
+            "boxShadow": "0 4px 20px rgba(2,132,199,0.5)",
+            "transition": "transform 0.2s",
+        }),
+
+        # Chat panel
+        html.Div(id="chat-panel", children=[
+
+            # Header
+            html.Div([
+                html.Div([
+                 html.Img(src="/assets/bot.png", style={
+                    "width": "38px", "height": "38px", "borderRadius": "50%",
+                    "objectFit": "cover", "flexShrink": "0",
+                }),
+                    html.Div([
+                        html.Div("ONE Health Bot", style={
+                            "color": "white", "fontWeight": "700",
+                            "fontSize": "14px", "fontFamily": "'Sora',sans-serif",
+                        }),
+                        html.Div([
+                            html.Span("●", style={"color": "#4ade80", "fontSize": "10px", "marginRight": "4px"}),
+                            html.Span("DASHBOARD ASSISTANT", style={
+                                "color": "rgba(255,255,255,0.7)", "fontSize": "10px",
+                                "fontFamily": "'Space Mono', monospace", "letterSpacing": "0.5px",
+                            }),
+                        ], style={"display": "flex", "alignItems": "center"}),
+                    ]),
+                ], style={"display": "flex", "alignItems": "center", "gap": "10px"}),
+                html.Div([
+                    html.Button("⤢", id="chat-expand-btn", n_clicks=0, style={
+                        "background": "transparent", "border": "none", "color": "rgba(255,255,255,0.7)",
+                        "fontSize": "16px", "cursor": "pointer", "padding": "4px 8px",
+                    }),
+                    html.Button("✕", id="chat-close-btn", n_clicks=0, style={
+                        "background": "transparent", "border": "none", "color": "rgba(255,255,255,0.7)",
+                        "fontSize": "16px", "cursor": "pointer", "padding": "4px 8px",
+                    }),
+                ], style={"display": "flex", "alignItems": "center"}),
+            ], style={
+                "background": "linear-gradient(135deg, #1e3a5f, #0284c7)",
+                "padding": "14px 16px", "borderRadius": "16px 16px 0 0",
+                "display": "flex", "justifyContent": "space-between", "alignItems": "center",
+            }),
+
+            # Chat history
+            html.Div(id="chat-history", children=[
+                html.Div([
+                    html.Div("👋 Hello! I'm your ONE Health Assistant for Bettahalasuru village. Ask me anything about human health, animal health, environment, or interconnections data!", style={
+                        "background": "white", "padding": "10px 14px",
+                        "borderRadius": "4px 16px 16px 16px",
+                        "fontSize": "13px", "color": "#1e293b", "lineHeight": "1.6",
+                        "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+                        "maxWidth": "85%",
+                    }),
+                    html.Div("Just now", style={"fontSize": "10px", "color": "#94a3b8", "marginTop": "4px", "marginLeft": "4px"}),
+                ], style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start", "marginBottom": "12px"}),
+            ], style={
+                "height": "420px",
+                "overflowY": "scroll",
+                "overflowX": "hidden",
+                "padding": "16px",
+                "background": "#f1f5f9",
+                "display": "flex",
+                "flexDirection": "column",
+                "scrollBehavior": "smooth",
+            }),
+
+            # Typing indicator (hidden by default)
+            html.Div(id="typing-indicator", children=[
+                html.Div([
+                    html.Span(style={
+                        "width": "7px", "height": "7px", "borderRadius": "50%",
+                        "background": "#94a3b8", "display": "inline-block",
+                        "animation": "bounce 1s infinite", "margin": "0 2px",
+                    }),
+                    html.Span(style={
+                        "width": "7px", "height": "7px", "borderRadius": "50%",
+                        "background": "#94a3b8", "display": "inline-block",
+                        "animation": "bounce 1s infinite 0.2s", "margin": "0 2px",
+                    }),
+                    html.Span(style={
+                        "width": "7px", "height": "7px", "borderRadius": "50%",
+                        "background": "#94a3b8", "display": "inline-block",
+                        "animation": "bounce 1s infinite 0.4s", "margin": "0 2px",
+                    }),
+                ], style={
+                    "background": "white", "padding": "10px 16px",
+                    "borderRadius": "4px 16px 16px 16px",
+                    "display": "inline-flex", "alignItems": "center",
+                    "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+                }),
+            ], style={"padding": "0 16px 8px", "background": "#f1f5f9", "display": "none"}),
+
+            # Input area
+            html.Div([
+                dcc.Textarea(
+                    id="chat-input",
+                    placeholder="Ask ONE Health Bot...",
+                    value="",
+                    style={
+                        "flex": "1",
+                        "borderRadius": "24px", "border": "1px solid #e2e8f0",
+                        "fontSize": "13px", "fontFamily": "'Sora',sans-serif",
+                        "resize": "none", "outline": "none",
+                        "background": "#f8fafc", "color": "#1e293b",
+                        "lineHeight": "1.5", "maxHeight": "60px", "height": "38px", "padding": "8px 14px",
+                        "overflowY": "auto",
+                        "boxShadow": "inset 0 1px 3px rgba(0,0,0,0.05)",
+                    }
+                ),
+                html.Button("➤", id="chat-send-btn", n_clicks=0, style={
+                    "width": "40px", "height": "40px", "borderRadius": "50%",
+                    "background": "linear-gradient(135deg, #0284c7, #0ea5e9)",
+                    "color": "white", "border": "none", "fontSize": "16px",
+                    "cursor": "pointer", "flexShrink": "0",
+                    "boxShadow": "0 2px 8px rgba(2,132,199,0.4)",
+                    "display": "flex", "alignItems": "center", "justifyContent": "center",
+                }),
+            ], style={
+                "display": "flex", "alignItems": "center", "gap": "10px",
+                "padding": "12px 16px", "background": "white",
+                "borderTop": "1px solid #e2e8f0", "borderRadius": "0 0 16px 16px",
+            }),
+
+            # Footer
+            html.Div("PROTECTED BY ◎ IISc Bangalore", style={
+                "textAlign": "center", "fontSize": "9px", "color": "#94a3b8",
+                "padding": "6px", "background": "white",
+                "borderRadius": "0 0 16px 16px",
+                "fontFamily": "'Space Mono', monospace", "letterSpacing": "0.5px",
+            }),
+
+        ], style={
+            "display": "none",
+            "position": "fixed", "bottom": "100px", "right": "30px",
+            "width": "360px", "borderRadius": "16px",
+            "boxShadow": "0 12px 40px rgba(0,0,0,0.18)",
+            "zIndex": "999", "border": "1px solid #e2e8f0",
+            "fontFamily": "'Sora',sans-serif",
+            "overflow": "hidden",
+        }),
+    ]),
+
 ], style={
     "background": "#ffffff",
     "minHeight": "100vh",
     "fontFamily": "'Sora',sans-serif",
     "color": TEXT,
 })
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CALLBACKS
@@ -3358,6 +3616,236 @@ def render_page(tab, _ts):
     }
     return pages.get(tab, page_overview)(d)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CHATBOT CALLBACKS
+# ══════════════════════════════════════════════════════════════════════════════
+
+app.clientside_callback(
+    """
+    function(id) {
+        setTimeout(function() {
+            var input = document.getElementById('chat-input');
+            if (!input) return;
+
+            if (window._chatKeyHandler) {
+                input.removeEventListener('keydown', window._chatKeyHandler);
+            }
+
+            window._chatKeyHandler = function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var btn = document.getElementById('chat-send-btn');
+                    if (btn) btn.click();
+                }
+            };
+
+            input.addEventListener('keydown', window._chatKeyHandler);
+
+            // Auto scroll to bottom whenever new content added
+            var chatBox = document.getElementById('chat-history');
+            if (chatBox) {
+                if (window._chatScrollObserver) {
+                    window._chatScrollObserver.disconnect();
+                }
+                window._chatScrollObserver = new MutationObserver(function() {
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                });
+                window._chatScrollObserver.observe(chatBox, {
+                    childList: true,
+                    subtree: true
+                });
+            }
+
+        }, 500);
+        return id;
+    }
+    """,
+    Output("chat-input", "id"),
+    Input("chat-input", "id"),
+)
+
+@app.callback(
+    Output("chat-panel", "style"),
+    Input("chat-toggle-btn", "n_clicks"),
+    Input("chat-close-btn",  "n_clicks"),
+    Input("chat-expand-btn", "n_clicks"),
+    State("chat-panel", "style"),
+    prevent_initial_call=True,
+)
+def toggle_chat(open_clicks, close_clicks, expand_clicks, current_style):
+    from dash import ctx
+    triggered = ctx.triggered_id
+
+    normal_style = {
+        "display": "block",
+        "position": "fixed",
+        "bottom": "100px",
+        "right": "30px",
+        "width": "380px",
+        "height": "560px",
+        "borderRadius": "16px",
+        "boxShadow": "0 12px 40px rgba(0,0,0,0.18)",
+        "zIndex": "999",
+        "border": "1px solid #e2e8f0",
+        "fontFamily": "'Sora',sans-serif",
+        "overflow": "hidden",
+    }
+
+    fullscreen_style = {
+        "display": "block",
+        "position": "fixed",
+        "top": "0",
+        "left": "0",
+        "right": "0",
+        "bottom": "0",
+        "width": "100vw",
+        "height": "100vh",
+        "borderRadius": "0",
+        "boxShadow": "none",
+        "zIndex": "9999",
+        "border": "none",
+        "fontFamily": "'Sora',sans-serif",
+        "overflow": "hidden",
+    }
+
+    hidden_style = {
+        "display": "none",
+        "position": "fixed",
+        "bottom": "100px",
+        "right": "30px",
+        "width": "380px",
+        "height": "560px",
+        "borderRadius": "16px",
+        "zIndex": "999",
+        "fontFamily": "'Sora',sans-serif",
+        "overflow": "hidden",
+    }
+
+    if triggered == "chat-close-btn":
+        return hidden_style
+
+    if triggered == "chat-expand-btn":
+        is_fullscreen = (
+            current_style is not None and
+            current_style.get("width") == "100vw"
+        )
+        return normal_style if is_fullscreen else fullscreen_style
+
+    # chat-toggle-btn
+    open_clicks = open_clicks or 0
+    if open_clicks % 2 == 1:
+        return normal_style
+    return hidden_style
+
+@app.callback(
+    Output("chat-store", "data"),
+    Output("chat-input", "value"),
+    Input("chat-send-btn", "n_clicks"),
+    State("chat-input",    "value"),
+    State("chat-store",    "data"),
+    prevent_initial_call=True,
+)
+def store_chat(n_clicks, user_input, stored):
+    if not user_input or not user_input.strip():
+        return stored or [], ""
+
+    from datetime import datetime
+    now = datetime.now().strftime("%I:%M %p")
+
+    messages = list(stored or [])
+    messages.append({"role": "user", "text": user_input.strip(), "time": now})
+    bot_reply = ask_ollama(user_input.strip())
+    messages.append({"role": "bot", "text": bot_reply, "time": now})
+
+    return messages, ""
+
+
+@app.callback(
+    Output("chat-history", "children"),
+    Input("chat-store", "data"),
+)
+def render_chat(messages):
+    welcome = html.Div([
+        html.Div(
+            "👋 Hello! I am your ONE Health Assistant for Bettahalasuru village. "
+            "Ask me anything about human health, animal health, environment, or interconnections data!",
+            style={
+                "background": "#e8f0fe", "padding": "10px 14px",
+                "borderRadius": "4px 16px 16px 16px",
+                "fontSize": "13px", "color": "#0d1b2a", "lineHeight": "1.6",
+                "boxShadow": "0 1px 4px rgba(0,0,0,0.08)", "maxWidth": "85%",
+            }
+        ),
+        html.Div("Just now", style={
+            "fontSize": "10px", "color": "#94a3b8",
+            "marginTop": "4px", "marginLeft": "4px",
+        }),
+    ], style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start", "marginBottom": "12px"})
+
+    if not messages:
+        return [welcome]
+
+    def clean_text(text):
+        import re
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        text = re.sub(r'#+\s?', '', text)
+        return text.strip()
+
+    def format_message(text):
+        text = clean_text(text)
+        lines = text.split('\n')
+        elements = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                elements.append(html.Br())
+            else:
+                elements.append(html.Div(line, style={
+                    "marginBottom": "4px",
+                    "lineHeight": "1.6",
+                }))
+        return elements
+
+    bubbles = [welcome]
+    for msg in messages:
+        role = msg.get("role")
+        text = msg.get("text", "")
+        time = msg.get("time", "")
+
+        if role == "user":
+            bubbles.append(html.Div([
+                html.Div(text, style={
+                    "background": "linear-gradient(135deg, #01579b, #0277bd)",
+                    "color": "white", "padding": "10px 14px",
+                    "borderRadius": "16px 4px 16px 16px",
+                    "fontSize": "13px", "lineHeight": "1.6",
+                    "maxWidth": "85%", "boxShadow": "0 2px 8px rgba(1,87,155,0.35)",
+                }),
+                html.Div(time, style={
+                    "fontSize": "10px", "color": "#94a3b8",
+                    "marginTop": "4px", "marginRight": "4px",
+                }),
+            ], style={"display": "flex", "flexDirection": "column", "alignItems": "flex-end", "marginBottom": "12px"}))
+
+        elif role == "bot":
+            bubbles.append(html.Div([
+                html.Div(format_message(text), style={
+                    "background": "#e8f0fe", "color": "#0d1b2a",
+                    "padding": "10px 14px",
+                    "borderRadius": "4px 16px 16px 16px",
+                    "fontSize": "13px",
+                    "maxWidth": "85%", "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+                }),
+                html.Div(time, style={
+                    "fontSize": "10px", "color": "#94a3b8",
+                    "marginTop": "4px", "marginLeft": "4px",
+                }),
+            ], style={"display": "flex", "flexDirection": "column", "alignItems": "flex-start", "marginBottom": "12px"}))
+
+    return bubbles
+#════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 @app.callback(
     Output("calib-charts",  "children"),
