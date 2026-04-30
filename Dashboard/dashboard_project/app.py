@@ -329,9 +329,13 @@ SYSTEM_PROMPT = (
     "9. NEVER say things like 'I am so glad you are here' or 'lovely village' or any overly enthusiastic phrases. Be calm, helpful and direct.\n"
     "10. When user sends short positive words like ok, done, good, great, thanks, thank you, nice, cool, perfect — reply with a short warm acknowledgement like Sure, Glad to help, Anytime, Let me know. Nothing more.\n"
     "11. When user sends short negative words like no, nope, not really — reply briefly and politely like Alright, let me know if you need anything.\n"
-    "12. NEVER say No answer available or I do not know. If you are unsure, say I do not have enough data on that right now, please check with the health team.\n"    "13. Always be warm, polite and conversational like a helpful village health assistant.\n"
-
+    "12. NEVER say No answer available or I do not know. If you are unsure, say I do not have enough data on that right now, please check with the health team.\n"    
+    "13. Always be warm, polite and conversational like a helpful village health assistant.\n"
+    "14. ALWAYS answer exactly what the user asked. If they ask for one specific number, give that exact number first. Never replace it with a different but related number.\n"
+    "15. First sentence must directly answer only what was asked. Match the question to the exact data field. Never use a related or similar number as a substitute.\n"
 )
+
+
 def build_prompt(user_question, history=None):
     try:
         # ── HUMAN DATA ──────────────────────────────────────────────────
@@ -681,7 +685,7 @@ def ask_ollama(user_question):
                 "stream": False,
                 "options": {
                     "num_predict": 200,
-                    "temperature": 0.7,
+                    "temperature": 0.6,
                     "top_p": 0.9,
                 }
             },
