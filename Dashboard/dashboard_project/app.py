@@ -3385,246 +3385,881 @@ def page_environment(d):
 
 
 def page_interconnections(d):
-    zoo  = d.get("zoonoticTransmission", pd.DataFrame())
-    rd   = d.get("rainfallDisease",      pd.DataFrame())
-    ints = d.get("interactionStrength",  pd.DataFrame())
-    rm   = d.get("riskMatrix",           pd.DataFrame())
-    cp   = d.get("crossPillarIndex",     pd.DataFrame())
-    wq   = d.get("water_quality",        pd.DataFrame())
-
-    # ── AQI and humidity from LIVE scrape ────────────────────────────────────
-    live_aqi_str, live_hum_str = get_live_aqi_humidity(d)
     try:
-        aqi_val = float(live_aqi_str) if live_aqi_str not in (None, "—") else "—"
-    except (TypeError, ValueError):
-        aqi_val = "—"
-    humidity_val = live_hum_str if live_hum_str not in (None, "—") else "—"
+        zoo  = d.get("zoonoticTransmission", pd.DataFrame())
+        rd   = d.get("rainfallDisease",      pd.DataFrame())
+        ints = d.get("interactionStrength",  pd.DataFrame())
+        rm   = d.get("riskMatrix",           pd.DataFrame())
+        cp   = d.get("crossPillarIndex",     pd.DataFrame())
+        proj = d.get("projectedOutcome",     pd.DataFrame())
+    except Exception:
+        zoo = rd = ints = rm = cp = proj = pd.DataFrame()
 
-    effluent_tds = "—"
-    wq_source_col = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
-    wq_tds_col = find_col(wq, ["TDS_ppm", "TDS", "tds"])
-    if wq_source_col and wq_tds_col and not wq.empty:
-        mask = wq[wq_source_col].astype(str).str.lower().str.contains("effluent|household", na=False)
-        if mask.any():
-            tds_raw = pd.to_numeric(wq.loc[mask, wq_tds_col].iloc[0], errors="coerce")
-            if pd.notna(tds_raw):
-                effluent_tds = f"{int(tds_raw):,}"
-
-    top_risk_urgency  = "—"
-    rm_factor_col_k   = find_col(rm, ["factor"])
-    rm_urgency_col_k  = find_col(rm, ["urgency"])
-    if rm_factor_col_k and rm_urgency_col_k and not rm.empty:
-        rm_u = coerce_numeric(rm, [rm_urgency_col_k]).dropna(subset=[rm_urgency_col_k])
-        if not rm_u.empty:
-            top_risk_urgency = fmt_num(rm_u[rm_urgency_col_k].max())
-
-    rainfall_corr = "—"
-    rd_rain_col_k = find_col(rd, ["rainfallIndex", "rainfall_index", "rainfall"])
-    rd_dengue_col = find_col(rd, ["dengueCases", "dengue"])
-    if rd_rain_col_k and rd_dengue_col and not rd.empty:
-        rd_c = coerce_numeric(rd, [rd_rain_col_k, rd_dengue_col]).dropna(subset=[rd_rain_col_k, rd_dengue_col])
-        if len(rd_c) >= 2:
-            corr = rd_c[rd_rain_col_k].corr(rd_c[rd_dengue_col])
-            if pd.notna(corr):
-                rainfall_corr = f"{corr:.2f}"
-
-    lepto_env_pct = "—"
-    zoo_path_col  = find_col(zoo, ["pathway"])
-    zoo_env_col   = find_col(zoo, ["environmental"])
-    if zoo_path_col and zoo_env_col and not zoo.empty:
-        lepto_row = zoo[zoo[zoo_path_col].astype(str).str.lower().str.contains("lepto")]
-        if not lepto_row.empty:
-            val = pd.to_numeric(lepto_row[zoo_env_col].iloc[0], errors="coerce")
-            if pd.notna(val):
-                lepto_env_pct = fmt_num(val)
-
-    abc_vacc_eff = "—"
-    rp2 = d.get("rabiesProjection", pd.DataFrame())
-    rp_year_col2  = find_col(rp2, ["year"])
-    rp_noabc_col  = find_col(rp2, ["noAbc"])
-    rp_vacc_col   = find_col(rp2, ["withAbcVaccination"])
-    if rp_year_col2 and rp_noabc_col and rp_vacc_col and not rp2.empty:
-        rp2_n = coerce_numeric(rp2, [rp_noabc_col, rp_vacc_col]).dropna(subset=[rp_noabc_col, rp_vacc_col])
-        if not rp2_n.empty:
-            last = rp2_n.iloc[-1]
-            no_abc = last[rp_noabc_col]
-            with_vacc = last[rp_vacc_col]
-            if no_abc > 0:
-                abc_vacc_eff = fmt_num(round((1 - with_vacc / no_abc) * 100))
-
-    oh_reduction = "—"
-    proj3 = d.get("projectedOutcome", pd.DataFrame())
-    proj_year3 = find_col(proj3, ["year"])
-    proj_no3   = find_col(proj3, ["noIntervention", "baseline"])
-    proj_full3 = find_col(proj3, ["fullOneHealth", "full"])
-    if proj_year3 and proj_no3 and proj_full3 and not proj3.empty:
-        p3 = coerce_numeric(proj3, [proj_no3, proj_full3]).dropna(subset=[proj_no3, proj_full3])
-        if not p3.empty:
-            last3 = p3.iloc[-1]
-            if last3[proj_no3] > 0:
-                oh_reduction = f"−{fmt_num(round((1 - last3[proj_full3] / last3[proj_no3]) * 100))}"
-
-    zoo_pathway_col = find_col(zoo, ["pathway"])
-    fig_zoo = empty_fig("No zoonotic transmission data available")
-    if zoo_pathway_col:
-        zoo_plot = coerce_numeric(zoo, [
-            find_col(zoo, ["directContact"]),
-            find_col(zoo, ["environmental"]),
-            find_col(zoo, ["foodWater"]),
-            find_col(zoo, ["vectorMediated"]),
-        ])
-        fig_zoo = go.Figure()
-        for col, c, name in [
-            (find_col(zoo, ["directContact"]), C_RED,   "Direct Contact"),
-            (find_col(zoo, ["environmental"]), C_GREEN, "Environmental"),
-            (find_col(zoo, ["foodWater"]),     C_AMBER, "Food / Water"),
-            (find_col(zoo, ["vectorMediated"]),C_BLUE,  "Vector Mediated"),
-        ]:
-            if col:
-                valid = zoo_plot[[zoo_pathway_col, col]].dropna()
-                if valid.empty:
-                    continue
-                fig_zoo.add_trace(go.Bar(x=valid[zoo_pathway_col], y=valid[col], name=name, marker_color=c))
-        if not fig_zoo.data:
-            fig_zoo = empty_fig("No zoonotic transmission data available")
-    fig_zoo.update_layout(**PL("Zoonotic Transmission Pathways", barmode="stack", yaxis_title="Transmission %"))
-    fig_zoo.update_xaxes(tickangle=-15)
-
-    rd_rain_col = find_col(rd, ["rainfallIndex"])
-    rd_year_col = find_col(rd, ["year"])
-    fig_rain = empty_fig("No rainfall-disease data available")
-    if rd_rain_col:
-        rd_plot = coerce_numeric(rd, [rd_rain_col, rd_year_col] if rd_year_col else [rd_rain_col])
-        fig_rain = go.Figure()
-        for col, c, name in [
-            (find_col(rd, ["dengueCases"]),   C_RED,    "Dengue"),
-            (find_col(rd, ["malariaCases"]),  C_PURPLE, "Malaria"),
-            (find_col(rd, ["leptospirosis"]), C_GREEN,  "Leptospirosis"),
-        ]:
-            if col:
-                rd_plot = coerce_numeric(rd_plot, [col])
-                valid = rd_plot[[rd_rain_col, col] + ([rd_year_col] if rd_year_col else [])].dropna(subset=[rd_rain_col, col])
-                if valid.empty:
-                    continue
-                fig_rain.add_trace(go.Scatter(
-                    x=valid[rd_rain_col], y=valid[col], name=name,
-                    mode="markers+lines", marker=dict(size=10, color=c),
-                    line=dict(color=c, width=1.8),
-                    text=valid[rd_year_col] if rd_year_col else None,
-                    hovertemplate=f"<b>{name}</b><br>Rainfall: %{{x}}<br>Cases: %{{y}}<extra></extra>",
-                ))
-        if not fig_rain.data:
-            fig_rain = empty_fig("No rainfall-disease data available")
-    fig_rain.update_layout(**PL("Rainfall Index vs Vector Disease Cases",
-                                 xaxis_title="Rainfall Index", yaxis_title="Cases"))
-
-    ints_label_col   = find_col(ints, ["interaction"])
-    ints_current_col = find_col(ints, ["current"])
-    ints_after_col   = find_col(ints, ["afterIntervention", "after_intervention"])
-    fig_int = empty_fig("No interaction strength data available")
-    if ints_label_col and ints_current_col and ints_after_col:
-        ints_plot = coerce_numeric(ints, [ints_current_col, ints_after_col]).dropna(subset=[ints_label_col, ints_current_col, ints_after_col])
-        if not ints_plot.empty:
-            fig_int = go.Figure()
-            fig_int.add_trace(go.Bar(x=ints_plot[ints_label_col], y=ints_plot[ints_current_col],
-                                      name="Current", marker_color=C_RED, marker_line_width=0))
-            fig_int.add_trace(go.Bar(x=ints_plot[ints_label_col], y=ints_plot[ints_after_col],
-                                      name="After Intervention", marker_color=rgba(C_GREEN, 0.6),
-                                      marker_line_color=C_GREEN, marker_line_width=1.5))
-    fig_int.update_layout(**PL("Cross-Pillar Interaction — Before vs After",
-                                barmode="group", yaxis_title="Interaction Score"))
-
-    rm_likelihood_col = find_col(rm, ["likelihood"])
-    rm_impact_col     = find_col(rm, ["impact"])
-    rm_urgency_col    = find_col(rm, ["urgency"])
-    rm_factor_col     = find_col(rm, ["factor"])
+    # ── CHART 1: Risk Matrix — Bubble chart ──────────────────────────────────
     fig_bub = empty_fig("No risk matrix data available")
-    if rm_likelihood_col and rm_impact_col and rm_urgency_col and rm_factor_col:
-        rm_plot = coerce_numeric(rm, [rm_likelihood_col, rm_impact_col, rm_urgency_col])
-        rm_plot = rm_plot.dropna(subset=[rm_likelihood_col, rm_impact_col, rm_urgency_col, rm_factor_col]).copy()
-        if not rm_plot.empty:
-            fig_bub = px.scatter(
-                rm_plot, x=rm_likelihood_col, y=rm_impact_col, size=rm_urgency_col,
-                hover_name=rm_factor_col, text=rm_factor_col, size_max=55,
-                color=rm_urgency_col,
-                color_continuous_scale=[[0, C_GREEN], [0.4, C_AMBER], [0.7, C_RED], [1, "#7f1d1d"]],
-                title="Risk Matrix — Likelihood vs Impact (size = Urgency)",
-                labels={rm_likelihood_col: "Likelihood (%)", rm_impact_col: "Impact Score"},
-            )
-            fig_bub.update_traces(textposition="top center", textfont=dict(size=9, color=MUTED))
-            fig_bub.update_layout(**PL())
-            fig_bub.update_coloraxes(colorbar_tickfont_color=MUTED, colorbar_title_font_color=MUTED)
+    try:
+        rm_factor_col     = find_col(rm, ["factor"])
+        rm_likelihood_col = find_col(rm, ["likelihood"])
+        rm_impact_col     = find_col(rm, ["impact"])
+        rm_urgency_col    = find_col(rm, ["urgency"])
 
-    return html.Div([
-        section_banner("Interconnectedness", "HOW HUMAN · ANIMAL · ENVIRONMENT HEALTH ARE LINKED IN BETTAHALASURU"),
+        if rm_factor_col and rm_likelihood_col and rm_impact_col and rm_urgency_col and not rm.empty:
+            rm_plot = coerce_numeric(rm, [rm_likelihood_col, rm_impact_col, rm_urgency_col]).copy()
+            rm_plot = rm_plot.dropna(subset=[rm_factor_col, rm_likelihood_col, rm_impact_col, rm_urgency_col])
 
+            if not rm_plot.empty:
+                u_min = rm_plot[rm_urgency_col].min()
+                u_max = rm_plot[rm_urgency_col].max()
+                COLOR_MAP = {
+                    "water contamination":   "rgba(255,112,67,0.65)",
+                    "e.coli in lakes":       "rgba(255,112,67,0.50)",
+                    "ecoli in lakes":        "rgba(255,112,67,0.50)",
+                    "vector-borne diseases": "rgba(79,195,247,0.55)",
+                    "vectorborne diseases":  "rgba(79,195,247,0.55)",
+                    "rabies":                "rgba(255,202,40,0.60)",
+                    "rabies/stray dogs":     "rgba(255,202,40,0.60)",
+                    "soil microbial load":   "rgba(171,71,188,0.50)",
+                    "air quality (aqi 135)": "rgba(255,202,40,0.45)",
+                    "air quality":           "rgba(255,202,40,0.45)",
+                    "amr from livestock":    "rgba(105,240,174,0.55)",
+                    "ncd burden":            "rgba(79,195,247,0.40)",
+                }
+                BORDER_MAP = {
+                    "water contamination":   C_RED,
+                    "e.coli in lakes":       C_RED,
+                    "ecoli in lakes":        C_RED,
+                    "vector-borne diseases": C_BLUE,
+                    "vectorborne diseases":  C_BLUE,
+                    "rabies":                C_AMBER,
+                    "rabies/stray dogs":     C_AMBER,
+                    "soil microbial load":   C_PURPLE,
+                    "air quality (aqi 135)": C_AMBER,
+                    "air quality":           C_AMBER,
+                    "amr from livestock":    C_GREEN,
+                    "ncd burden":            C_BLUE,
+                }
+                fig_bub = go.Figure()
+                for _, row in rm_plot.iterrows():
+                    fname     = str(row[rm_factor_col]).strip()
+                    fkey      = fname.lower()
+                    lval      = float(row[rm_likelihood_col])
+                    ival      = float(row[rm_impact_col])
+                    uval      = float(row[rm_urgency_col])
+                    r         = 11 + (uval - u_min) / (u_max - u_min) * 11 if u_max > u_min else 16
+                    bg_color  = COLOR_MAP.get(fkey, "rgba(79,195,247,0.45)")
+                    brd_color = BORDER_MAP.get(fkey, C_BLUE)
+                    fig_bub.add_trace(go.Scatter(
+                        x=[lval], y=[ival],
+                        mode="markers",
+                        name=fname,
+                        marker=dict(
+                            size=r * 2,
+                            color=bg_color,
+                            line=dict(color=brd_color, width=1.5),
+                            sizemode="diameter",
+                        ),
+                        hovertemplate=f"<b>{fname}</b><br>Likelihood: {lval}<br>Impact: {ival}<br>Urgency: {uval}<extra></extra>",
+                    ))
+                fig_bub.update_layout(**PL(
+                    "Risk Matrix — Likelihood vs Impact",
+                    xaxis=dict(title="Likelihood →", range=[0, 110],
+                               gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
+                               showticklabels=False, title_font_color=MUTED,
+                               zerolinecolor=BORDER, linecolor=BORDER),
+                    yaxis=dict(title="Impact →", range=[0, 110],
+                               gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
+                               showticklabels=False, title_font_color=MUTED,
+                               zerolinecolor=BORDER, linecolor=BORDER),
+                    showlegend=True,
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
+                                orientation="h", x=0, y=-0.18),
+                    margin=dict(l=20, r=20, t=44, b=60),
+                ))
+    except Exception as e:
+        print(f"[interconnect] risk matrix error: {e}")
+
+    # ── CHART 2: Rainfall vs Vector Disease ──────────────────────────────────
+    fig_rain = empty_fig("No rainfall-disease data available")
+    try:
+        rd_year_col    = find_col(rd, ["year"])
+        rd_rain_col    = find_col(rd, ["rainfallIndex", "rainfall_index", "rainfall"])
+        rd_dengue_col  = find_col(rd, ["dengueCases",   "dengue"])
+        rd_malaria_col = find_col(rd, ["malariaCases",  "malaria"])
+        rd_lepto_col   = find_col(rd, ["leptospirosis", "lepto"])
+
+        if rd_year_col and rd_rain_col and not rd.empty:
+            rd_plot = coerce_numeric(rd, [c for c in [rd_year_col, rd_rain_col, rd_dengue_col, rd_malaria_col, rd_lepto_col] if c]).copy()
+            rd_plot = rd_plot.dropna(subset=[rd_year_col, rd_rain_col])
+            if not rd_plot.empty:
+                fig_rain = go.Figure()
+                fig_rain.add_trace(go.Scatter(
+                    x=rd_plot[rd_year_col].astype(str),
+                    y=rd_plot[rd_rain_col],
+                    name="Rainfall Index",
+                    mode="lines+markers",
+                    line=dict(color="rgba(79,195,247,0.9)", width=2.5, shape="spline"),
+                    marker=dict(size=5, color=C_BLUE),
+                    fill="tozeroy", fillcolor="rgba(79,195,247,0.08)",
+                    yaxis="y",
+                    hovertemplate="<b>Rainfall</b><br>Year: %{x}<br>Index: %{y}<extra></extra>",
+                ))
+                disease_series = []
+                if rd_dengue_col:
+                    disease_series.append((rd_dengue_col, C_RED,    "Dengue Cases",  False))
+                if rd_malaria_col:
+                    disease_series.append((rd_malaria_col, C_PURPLE, "Malaria Cases", True))
+                if rd_lepto_col:
+                    disease_series.append((rd_lepto_col,  C_GREEN,  "Leptospirosis", True))
+                for col, color, name, use_dash in disease_series:
+                    valid = rd_plot[[rd_year_col, col]].dropna()
+                    if valid.empty:
+                        continue
+                    line_cfg = dict(color=color, width=2, shape="spline")
+                    if use_dash:
+                        line_cfg["dash"] = "dash"
+                    fig_rain.add_trace(go.Scatter(
+                        x=valid[rd_year_col].astype(str),
+                        y=valid[col],
+                        name=name,
+                        mode="lines+markers",
+                        line=line_cfg,
+                        marker=dict(size=5, color=color),
+                        fill="tozeroy" if name == "Dengue Cases" else "none",
+                        fillcolor="rgba(255,112,67,0.07)" if name == "Dengue Cases" else "rgba(0,0,0,0)",
+                        yaxis="y2",
+                        hovertemplate=f"<b>{name}</b><br>Year: %{{x}}<br>Cases: %{{y}}<extra></extra>",
+                    ))
+                fig_rain.update_layout(
+                    title=dict(text="Rainfall vs Vector-Borne Disease Burden",
+                               font=dict(size=13, color=TEXT)),
+                    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+                    font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
+                    margin=dict(l=20, r=50, t=44, b=20),
+                    hovermode="x unified",
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
+                                orientation="h", x=0, y=-0.18),
+                    xaxis=dict(gridcolor="rgba(0,0,0,0.07)", linecolor=BORDER,
+                               tickfont_color=MUTED, title_font_color=MUTED),
+                    yaxis=dict(title="Rainfall Index",
+                               title_font=dict(color=C_BLUE),
+                               tickfont=dict(color=C_BLUE),
+                               gridcolor="rgba(0,0,0,0.07)", linecolor=BORDER),
+                    yaxis2=dict(title="Disease Cases",
+                                title_font=dict(color=C_RED),
+                                tickfont=dict(color=C_RED),
+                                overlaying="y", side="right",
+                                gridcolor="rgba(0,0,0,0)", showgrid=False,
+                                linecolor=BORDER),
+                )
+    except Exception as e:
+        print(f"[interconnect] rainfall chart error: {e}")
+
+    # ── CHART 3: Zoonotic Transmission — stacked horizontal bar ──────────────
+    fig_zoo = empty_fig("No zoonotic transmission data available")
+    try:
+        zoo_path_col = find_col(zoo, ["pathway"])
+        zoo_dc_col   = find_col(zoo, ["directContact",  "direct_contact",  "direct"])
+        zoo_env_col  = find_col(zoo, ["environmental",  "environment"])
+        zoo_fw_col   = find_col(zoo, ["foodWater",      "food_water",      "food"])
+        zoo_vec_col  = find_col(zoo, ["vectorMediated", "vector_mediated", "vector"])
+
+        if zoo_path_col and not zoo.empty:
+            zoo_plot = coerce_numeric(zoo, [c for c in [zoo_dc_col, zoo_env_col, zoo_fw_col, zoo_vec_col] if c]).copy()
+            zoo_plot = zoo_plot.dropna(subset=[zoo_path_col])
+            if not zoo_plot.empty:
+                fig_zoo = go.Figure()
+                series = [
+                    (zoo_dc_col,  "rgba(255,112,67,0.70)",  "Direct Contact"),
+                    (zoo_env_col, "rgba(255,202,40,0.65)",  "Environmental Route"),
+                    (zoo_fw_col,  "rgba(171,71,188,0.55)",  "Food / Water Chain"),
+                    (zoo_vec_col, "rgba(79,195,247,0.55)",  "Vector Mediated"),
+                ]
+                for col, color, name in series:
+                    if not col:
+                        continue
+                    valid = zoo_plot[[zoo_path_col, col]].dropna()
+                    if valid.empty:
+                        continue
+                    fig_zoo.add_trace(go.Bar(
+                        y=valid[zoo_path_col].astype(str),
+                        x=valid[col],
+                        name=name,
+                        orientation="h",
+                        marker_color=color,
+                        marker_line_width=0,
+                        hovertemplate=f"<b>%{{y}}</b><br>{name}: %{{x}}%<extra></extra>",
+                    ))
+                fig_zoo.update_layout(**PL(
+                    "Zoonotic & AMR Transmission Pressure (Animal \u2192 Human)",
+                    barmode="stack",
+                    xaxis=dict(title="Transmission Pressure (relative %)",
+                               range=[0, 100], gridcolor="rgba(0,0,0,0.07)",
+                               tickfont_color=MUTED, title_font_color=MUTED,
+                               linecolor=BORDER, zerolinecolor=BORDER),
+                    yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont_color=MUTED,
+                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
+                                orientation="h", x=0, y=-0.18),
+                    margin=dict(l=20, r=20, t=44, b=80),
+                ))
+    except Exception as e:
+        print(f"[interconnect] zoonotic chart error: {e}")
+
+    # ── CHART 4: Cross-Pillar Contamination — Polar Area ─────────────────────
+    # FIX: The sheet loads in WIDE format — factor names become column headers,
+    # values sit in row 0.  find_col() correctly returns None because no column
+    # is literally called "factor" or "value".  We detect this and melt.
+    fig_polar = empty_fig("No cross-pillar contamination data available")
+    try:
+        if not cp.empty:
+            cp_factor_col = find_col(cp, ["factor", "Factor", "name", "label", "pathway", "Pathway"])
+            cp_value_col  = find_col(cp, ["value",  "Value",  "score", "Score", "index",   "Index", "risk", "Risk"])
+
+            print(f"[DEBUG crossPillar] columns={list(cp.columns)}  factor={cp_factor_col}  value={cp_value_col}")
+            print(cp.head())
+
+            # ── WIDE-FORMAT DETECTION & MELT ─────────────────────────────────
+            # When pandas reads the sheet it turns  factor | value  header into
+            # column names, so every factor label (Water TDS, Soil E.coli …)
+            # becomes a column header and row 0 contains the numeric values.
+            # find_col returns None because none of those column names contain
+            # the word "factor" or "value".  We detect this situation and melt.
+            if (cp_factor_col is None or cp_value_col is None) and not cp.empty:
+                print("[DEBUG crossPillar] wide-format detected — melting to long format")
+                try:
+                    row0 = cp.iloc[0]
+                    numeric_cols = [
+                        c for c in cp.columns
+                        if pd.to_numeric(row0[c], errors="coerce") is not None
+                        and str(row0[c]).strip() not in ("", "nan")
+                        and pd.notna(pd.to_numeric(row0[c], errors="coerce"))
+                    ]
+                    if numeric_cols:
+                        cp_melted = pd.DataFrame({
+                            "factor": numeric_cols,
+                            "value":  [pd.to_numeric(row0[c], errors="coerce") for c in numeric_cols],
+                        })
+                        cp_melted = cp_melted.dropna(subset=["value"])
+                        if not cp_melted.empty:
+                            cp            = cp_melted
+                            cp_factor_col = "factor"
+                            cp_value_col  = "value"
+                            print(f"[DEBUG crossPillar] melted OK — {len(cp_melted)} rows")
+                            print(cp_melted)
+                except Exception as melt_err:
+                    print(f"[DEBUG crossPillar] melt failed: {melt_err}")
+
+            # ── BUILD POLAR CHART ─────────────────────────────────────────────
+            if cp_factor_col and cp_value_col and not cp.empty:
+                cp_plot = cp[[cp_factor_col, cp_value_col]].copy()
+                cp_plot[cp_value_col] = pd.to_numeric(cp_plot[cp_value_col], errors="coerce")
+                cp_plot = cp_plot.dropna(subset=[cp_factor_col, cp_value_col])
+                cp_plot = cp_plot[cp_plot[cp_factor_col].astype(str).str.strip() != ""]
+
+                if not cp_plot.empty:
+                    labels = cp_plot[cp_factor_col].astype(str).tolist()
+                    values = cp_plot[cp_value_col].tolist()
+
+                    bg_colors, brd_colors = [], []
+                    for v in values:
+                        if v >= 70:
+                            bg_colors.append("rgba(255,112,67,0.55)")
+                            brd_colors.append(C_RED)
+                        elif v >= 50:
+                            bg_colors.append("rgba(255,202,40,0.55)")
+                            brd_colors.append(C_AMBER)
+                        elif v >= 30:
+                            bg_colors.append("rgba(105,240,174,0.55)")
+                            brd_colors.append(C_GREEN)
+                        else:
+                            bg_colors.append("rgba(79,195,247,0.45)")
+                            brd_colors.append(C_BLUE)
+
+                    fig_polar = go.Figure()
+                    fig_polar.add_trace(go.Barpolar(
+                        r=values,
+                        theta=labels,
+                        marker_color=bg_colors,
+                        marker_line_color=brd_colors,
+                        marker_line_width=1.5,
+                        hovertemplate="<b>%{theta}</b><br>Risk Index: %{r}/100<extra></extra>",
+                    ))
+                    fig_polar.update_layout(
+                        paper_bgcolor="#ffffff",
+                        font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=9),
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        polar=dict(
+                            bgcolor="#ffffff",
+                            radialaxis=dict(
+                                range=[0, 100],
+                                tickfont=dict(size=8, color=MUTED),
+                                gridcolor="rgba(0,0,0,0.08)",
+                                showticklabels=False,
+                            ),
+                            angularaxis=dict(
+                                tickfont=dict(size=8, color=TEXT),
+                                gridcolor="rgba(0,0,0,0.08)",
+                            ),
+                        ),
+                        showlegend=False,
+                    )
+                else:
+                    print("[DEBUG crossPillar] cp_plot empty after dropna")
+            else:
+                print("[DEBUG crossPillar] could not resolve factor/value columns after melt attempt")
+    except Exception as e:
+        print(f"[interconnect] polar chart error: {e}")
+        import traceback; traceback.print_exc()
+
+    # ── CHART 5: Pillar Interaction Strength ─────────────────────────────────
+    fig_int = empty_fig("No interaction strength data available")
+    try:
+        ints_label_col   = find_col(ints, ["interaction"])
+        ints_current_col = find_col(ints, ["current"])
+        ints_after_col   = find_col(ints, ["afterIntervention", "after_intervention", "after"])
+
+        if ints_label_col and ints_current_col and ints_after_col and not ints.empty:
+            ints_plot = coerce_numeric(ints, [ints_current_col, ints_after_col]).copy()
+            ints_plot = ints_plot.dropna(subset=[ints_label_col, ints_current_col, ints_after_col])
+            if not ints_plot.empty:
+                labels  = ints_plot[ints_label_col].astype(str).tolist()
+                current = ints_plot[ints_current_col].tolist()
+                after   = ints_plot[ints_after_col].tolist()
+                CURRENT_COLORS = [
+                    "rgba(79,195,247,0.65)",
+                    "rgba(105,240,174,0.65)",
+                    "rgba(255,112,67,0.65)",
+                    "rgba(255,202,40,0.60)",
+                    "rgba(171,71,188,0.65)",
+                    "rgba(255,202,40,0.50)",
+                ]
+                fig_int = go.Figure()
+                fig_int.add_trace(go.Bar(
+                    x=labels, y=current,
+                    name="Current Pressure",
+                    marker_color=[CURRENT_COLORS[i % len(CURRENT_COLORS)] for i in range(len(labels))],
+                    marker_line_width=0,
+                    hovertemplate="<b>%{x}</b><br>Current: %{y}<extra></extra>",
+                ))
+                fig_int.add_trace(go.Bar(
+                    x=labels, y=after,
+                    name="After Intervention",
+                    marker_color="rgba(105,240,174,0.25)",
+                    marker_line_color=C_GREEN, marker_line_width=1.5,
+                    hovertemplate="<b>%{x}</b><br>After Intervention: %{y}<extra></extra>",
+                ))
+                fig_int.update_layout(**PL(
+                    "One Health Pillar Interaction Strength",
+                    barmode="group",
+                    yaxis=dict(title="Interaction Strength (0\u2013100)", range=[0, 100],
+                               gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
+                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
+                    xaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(size=9, color=TEXT),
+                               tickangle=-10, title_font_color=MUTED,
+                               linecolor=BORDER, zerolinecolor=BORDER),
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
+                                orientation="h", x=0, y=-0.18),
+                    margin=dict(l=20, r=20, t=44, b=60),
+                ))
+    except Exception as e:
+        print(f"[interconnect] interaction chart error: {e}")
+
+    # ── CHART 6: Projected Outcome ────────────────────────────────────────────
+    fig_proj = empty_fig("No projected outcome data available")
+    try:
+        proj_year_col = find_col(proj, ["year"])
+        proj_no_col   = find_col(proj, ["noIntervention", "no_intervention", "baseline"])
+        proj_part_col = find_col(proj, ["partial"])
+        proj_full_col = find_col(proj, ["fullOneHealth", "full_one_health", "full"])
+
+        if proj_year_col and proj_no_col and not proj.empty:
+            proj_plot = coerce_numeric(proj, [c for c in [proj_year_col, proj_no_col, proj_part_col, proj_full_col] if c]).copy()
+            proj_plot = proj_plot.dropna(subset=[proj_year_col, proj_no_col])
+            if not proj_plot.empty:
+                fig_proj = go.Figure()
+                series_cfg = []
+                if proj_no_col:
+                    series_cfg.append((proj_no_col,   "rgba(255,112,67,0.9)",  "rgba(255,112,67,0.08)",
+                                       2.5, False, 4, C_RED,   "No Intervention (Composite Risk)"))
+                if proj_part_col:
+                    series_cfg.append((proj_part_col, "rgba(255,202,40,0.9)",  "rgba(255,202,40,0.06)",
+                                       2.0, True,  4, C_AMBER, "Partial Intervention"))
+                if proj_full_col:
+                    series_cfg.append((proj_full_col, "rgba(105,240,174,0.9)", "rgba(105,240,174,0.08)",
+                                       2.5, False, 5, C_GREEN, "Full One Health Protocol"))
+                for col, border_c, fill_c, width, use_dash, pt_size, pt_color, name in series_cfg:
+                    valid = proj_plot[[proj_year_col, col]].dropna()
+                    if valid.empty:
+                        continue
+                    line_cfg = dict(color=border_c, width=width, shape="spline", smoothing=0.8)
+                    if use_dash:
+                        line_cfg["dash"] = "dash"
+                    fig_proj.add_trace(go.Scatter(
+                        x=valid[proj_year_col].astype(str),
+                        y=valid[col],
+                        name=name,
+                        mode="lines+markers",
+                        line=line_cfg,
+                        marker=dict(size=pt_size, color=pt_color),
+                        fill="tozeroy", fillcolor=fill_c,
+                        hovertemplate=f"<b>{name}</b><br>Year: %{{x}}<br>Risk Score: %{{y}}<extra></extra>",
+                    ))
+                fig_proj.update_layout(**PL(
+                    "Projected Health Outcome \u2014 With vs Without Intervention",
+                    hovermode="x unified",
+                    yaxis=dict(title="Composite Risk Score", range=[0, 110],
+                               gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
+                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
+                    xaxis=dict(gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
+                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
+                                orientation="h", x=0, y=-0.18),
+                    margin=dict(l=20, r=20, t=44, b=60),
+                ))
+    except Exception as e:
+        print(f"[interconnect] projection chart error: {e}")
+
+    # ── FORCE-DIRECTED GRAPH ──────────────────────────────────────────────────
+    # FIX: html.Script() is silently stripped by Dash/React and never executes.
+    # Solution: render the entire interactive graph inside a self-contained
+    # srcdoc iframe.  The iframe runs its own JS completely independently of
+    # Dash's renderer, so the SVG force simulation works every time.
+    _graph_iframe_html = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#f1f5f9; font-family:'DM Mono',monospace; overflow:hidden; }
+  #ic-wrapper { position:relative; width:100%; height:100vh; }
+  svg { width:100%; height:100%; }
+  #ic-tooltip {
+    position:absolute; background:rgba(15,23,42,0.95); color:#e2e8f0;
+    border-radius:12px; padding:13px 17px; font-size:12px;
+    font-family:'DM Mono',monospace; pointer-events:none; opacity:0;
+    max-width:270px; line-height:1.65; z-index:100;
+    border:1px solid rgba(79,195,247,0.25);
+    box-shadow:0 8px 32px rgba(0,0,0,0.22);
+    transition:opacity 0.15s; display:none;
+  }
+  #legend-row {
+    position:absolute; top:10px; left:12px; right:12px;
+    display:flex; flex-wrap:wrap; gap:6px; z-index:50;
+  }
+  .chip {
+    padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600;
+    cursor:pointer; transition:all 0.18s;
+    background:rgba(0,0,0,0.06); display:flex; align-items:center; gap:5px;
+  }
+</style>
+</head>
+<body>
+<div id="ic-wrapper">
+  <div id="legend-row"></div>
+  <svg id="ic-svg"></svg>
+  <div id="ic-tooltip"></div>
+</div>
+<script>
+(function() {
+  var PATHWAYS = [
+    { id:'h2e', label:'Human \u2192 Environment', emoji:'\ud83d\udc64\u2192\ud83c\udf3f', color:'#4fc3f7' },
+    { id:'a2e', label:'Animal \u2192 Environment', emoji:'\ud83d\udc3e\u2192\ud83c\udf3f', color:'#69f0ae' },
+    { id:'e2h', label:'Environment \u2192 Human',  emoji:'\ud83c\udf3f\u2192\ud83d\udc64', color:'#ff7043' },
+    { id:'a2h', label:'Animal \u2192 Human',       emoji:'\ud83d\udc3e\u2192\ud83d\udc64', color:'#ab47bc' },
+    { id:'h2a', label:'Human \u2192 Animal',       emoji:'\ud83d\udc64\u2192\ud83d\udc3e', color:'#ffca28' },
+    { id:'priority', label:'Priority Interventions', emoji:'\ud83c\udfaf', color:'#ef5350' },
+  ];
+  var NODES = [
+    { id:'human',   emoji:'\ud83d\udc64', sub:'HUMAN',       color:'#4fc3f7', r:52,
+      info:'<b style="color:#0284c7">Human Pillar</b><br>3,573 residents \u00b7 PHC monitored<br>NCD burden, vector-borne & zoonotic disease risk' },
+    { id:'animal',  emoji:'\ud83d\udc3e', sub:'ANIMAL',      color:'#69f0ae', r:52,
+      info:'<b style="color:#15803d">Animal Pillar</b><br>73+ strays \u00b7 700\u20131k livestock<br>Rabies 13% post-ABC \u00b7 AMR monitored' },
+    { id:'environ', emoji:'\ud83c\udf3f', sub:'ENVIRONMENT', color:'#ff7043', r:52,
+      info:'<b style="color:#b91c1c">Environment Pillar</b><br>AQI 135 \u00b7 Humidity 37%<br>8/10 water samples exceed WHO TDS \u00b7 TNTC soil load' },
+    { id:'water',  emoji:'\ud83d\udca7', sub:'Water',    color:'#29b6f6', r:26,
+      info:'<b style="color:#29b6f6">Water Contamination</b><br>TDS 1420 ppm (household effluent)<br>Enterobacter in all lake entries' },
+    { id:'air',    emoji:'\ud83d\udca8', sub:'Air/AQI', color:'#ffca28', r:24,
+      info:'<b style="color:#92400e">Air Quality</b><br>AQI 135 \u2014 unhealthy for sensitive groups<br>Humidity 37% amplifies respiratory risk' },
+    { id:'vector', emoji:'\ud83e\udda0', sub:'Vectors', color:'#4fc3f7', r:26,
+      info:'<b style="color:#0284c7">Vector-Borne Disease</b><br>Malaria 30\u201350/yr \u00b7 Dengue 60 (2022)<br>Chikungunya 10\u201325/yr' },
+    { id:'rabies', emoji:'\ud83d\udc15', sub:'Rabies',  color:'#ffca28', r:24,
+      info:'<b style="color:#92400e">Rabies / Zoonosis</b><br>13% post-ABC infection rate<br>Leptospirosis 15 cases (2021)' },
+    { id:'amr',    emoji:'\ud83d\udc8a', sub:'AMR',     color:'#ab47bc', r:22,
+      info:'<b style="color:#6b21a8">AMR Residues</b><br>Doxycycline in pig/hen excreta<br>Below threshold \u00b7 Ongoing monitoring needed' },
+    { id:'soil',   emoji:'\ud83c\udf31', sub:'Soil',    color:'#69f0ae', r:22,
+      info:'<b style="color:#15803d">Soil Microbes</b><br>Horse stable: TNTC + E. coli indicator<br>Manure applied to agricultural fields' },
+    { id:'waste',  emoji:'\ud83d\udeb0', sub:'Effluent',color:'#ff7043', r:22,
+      info:'<b style="color:#b91c1c">Effluent & Waste</b><br>TDS 1420, DO 1.8 mg/L in drains<br>Open dumps sustain stray populations' },
+  ];
+  var EDGES = [
+    { s:'human',   t:'waste',   p:'h2e', label:'Sewage discharge',             info:'Household waste (TDS 1420 ppm) enters drains \u2192 lake entries show TNTC counts' },
+    { s:'waste',   t:'environ', p:'h2e', label:'Drain \u2192 lake & soil',     info:'Effluent (DO 1.8 mg/L) flows to lakes & groundwater, raising pathogen burden' },
+    { s:'human',   t:'vector',  p:'h2e', label:'Borewell tanks \u2192 breeding',info:'Open tanks and poor drainage create Anopheles/Aedes breeding habitats' },
+    { s:'animal',  t:'soil',    p:'a2e', label:'Manure \u2192 soil',           info:'Horse stable TNTC, pig/poultry excreta with doxycycline residues in fields' },
+    { s:'soil',    t:'water',   p:'a2e', label:'Runoff \u2192 waterbodies',    info:'Microbial-laden stable soil runoff reaches lake entries \u2014 E. coli on EMB confirmed' },
+    { s:'animal',  t:'amr',     p:'a2e', label:'Antibiotic residues',          info:'Doxycycline: pig 0.000002 mg/g, hen 0.00348 mg/g \u2014 both below 0.02 mg/g limit' },
+    { s:'water',   t:'human',   p:'e2h', label:'Contaminated drinking water',  info:'Villagers use lake water \u2192 E. coli & Enterobacter \u2192 GI illness risk' },
+    { s:'air',     t:'human',   p:'e2h', label:'Poor AQI \u2192 respiratory',  info:'AQI 135 + low humidity \u2192 TB, COPD, respiratory infections in children & elderly' },
+    { s:'vector',  t:'human',   p:'e2h', label:'Mosquito transmission',        info:'Dengue 60 (2022), malaria 30\u201350/yr, chikungunya 10\u201325/yr from stagnant water zones' },
+    { s:'environ', t:'air',     p:'e2h', label:'Quarrying & emissions',        info:'Quarrying depletes groundwater & raises dust \u2014 forcing reliance on surface sources' },
+    { s:'rabies',  t:'human',   p:'a2h', label:'Rabies bite risk',             info:'13% rabies infection in neutered-only pop. 73+ strays. Dog bites reported.' },
+    { s:'animal',  t:'rabies',  p:'a2h', label:'Stray dog reservoir',          info:'ABC program (17 dogs, Mar 2024) neutered \u2014 vaccination gaps leave 13% infected' },
+    { s:'amr',     t:'human',   p:'a2h', label:'AMR food-chain risk',          info:'Sub-threshold residues risk transferring resistance to human gut flora via food chain' },
+    { s:'human',   t:'rabies',  p:'h2a', label:'ABC intervention',             info:'ABC program: 17 dogs neutered + anti-rabies shot (Mar 2024).' },
+    { s:'human',   t:'amr',     p:'h2a', label:'Antibiotic use patterns',      info:'Farming economics shape doxycycline use in livestock.' },
+    { s:'waste',   t:'animal',  p:'h2a', label:'Dumps \u2192 stray feeding',   info:'Open food waste dumps sustain stray dog/cat populations, perpetuating rabies cycle' },
+    { s:'human',   t:'environ', p:'priority', label:'Water treatment needed',   info:'Borewell TDS/EC exceed WHO in 8/10 samples \u2192 install treatment systems urgently' },
+    { s:'animal',  t:'environ', p:'priority', label:'AMR & soil surveillance',  info:'Continuous HPLC monitoring of excreta & runoff to detect AMR threshold crossing' },
+    { s:'environ', t:'human',   p:'priority', label:'AQI & lake monitoring',    info:'Emission controls + regular lake Enterobacter testing' },
+  ];
+
+  function init() {
+    var wrapper   = document.getElementById('ic-wrapper');
+    var svg       = document.getElementById('ic-svg');
+    var tooltip   = document.getElementById('ic-tooltip');
+    var legendRow = document.getElementById('legend-row');
+    var W = wrapper.clientWidth  || 900;
+    var H = wrapper.clientHeight || 520;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    var NS = 'http://www.w3.org/2000/svg';
+
+    /* arrowhead defs */
+    var defs = document.createElementNS(NS, 'defs');
+    PATHWAYS.forEach(function(pw) {
+      var m = document.createElementNS(NS, 'marker');
+      m.setAttribute('id', 'arr-' + pw.id);
+      m.setAttribute('markerWidth', '7'); m.setAttribute('markerHeight', '7');
+      m.setAttribute('refX', '6');       m.setAttribute('refY', '3.5');
+      m.setAttribute('orient', 'auto');
+      var p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', 'M0,0 L0,7 L7,3.5 Z');
+      p.setAttribute('fill', pw.color);
+      m.appendChild(p); defs.appendChild(m);
+    });
+    svg.appendChild(defs);
+
+    /* node map + initial positions */
+    var nodeMap = {};
+    NODES.forEach(function(n){ nodeMap[n.id] = n; n.vx = 0; n.vy = 0; });
+    nodeMap['human'].x   = W*0.50; nodeMap['human'].y   = H*0.15;
+    nodeMap['animal'].x  = W*0.13; nodeMap['animal'].y  = H*0.75;
+    nodeMap['environ'].x = W*0.87; nodeMap['environ'].y = H*0.75;
+    nodeMap['water'].x   = W*0.78; nodeMap['water'].y   = H*0.38;
+    nodeMap['air'].x     = W*0.88; nodeMap['air'].y     = H*0.52;
+    nodeMap['vector'].x  = W*0.50; nodeMap['vector'].y  = H*0.38;
+    nodeMap['rabies'].x  = W*0.28; nodeMap['rabies'].y  = H*0.45;
+    nodeMap['amr'].x     = W*0.38; nodeMap['amr'].y     = H*0.62;
+    nodeMap['soil'].x    = W*0.22; nodeMap['soil'].y    = H*0.60;
+    nodeMap['waste'].x   = W*0.62; nodeMap['waste'].y   = H*0.55;
+
+    /* edges */
+    var edgeGroup = document.createElementNS(NS, 'g');
+    svg.appendChild(edgeGroup);
+    var linkEls = EDGES.map(function(edge) {
+      var pw    = PATHWAYS.find(function(p){ return p.id === edge.p; });
+      var color = pw ? pw.color : '#888';
+      var sN = nodeMap[edge.s], tN = nodeMap[edge.t];
+      var sw = edge.p === 'priority' ? 2.5 : (sN&&sN.r>30||tN&&tN.r>30) ? 2 : 1.5;
+      var line = document.createElementNS(NS, 'line');
+      line.setAttribute('stroke', color);
+      line.setAttribute('stroke-width', sw);
+      line.setAttribute('stroke-opacity', '0.7');
+      line.setAttribute('marker-end', 'url(#arr-' + edge.p + ')');
+      line.style.cursor = 'pointer';
+      line.style.transition = 'opacity 0.2s';
+      line.addEventListener('mouseenter', function(e) {
+        tooltip.innerHTML =
+          '<div style="font-weight:700;color:' + color + ';margin-bottom:5px;">' +
+          (pw ? pw.emoji + ' ' + pw.label : '') + '</div>' +
+          '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">\u2197 ' + edge.label + '</div>' +
+          edge.info;
+        showTip(e);
+      });
+      line.addEventListener('mouseleave', hideTip);
+      edgeGroup.appendChild(line);
+      return { el:line, p:edge.p, s:edge.s, t:edge.t };
+    });
+
+    /* nodes */
+    var nodeGroup = document.createElementNS(NS, 'g');
+    svg.appendChild(nodeGroup);
+    var nodeEls = NODES.map(function(nd) {
+      var g = document.createElementNS(NS, 'g');
+      g.style.cursor = 'grab';
+      var glow = document.createElementNS(NS, 'circle');
+      glow.setAttribute('r', nd.r+12);
+      glow.setAttribute('fill', nd.color);
+      glow.setAttribute('opacity', nd.r>40?'0.07':'0.05');
+      g.appendChild(glow);
+      var c = document.createElementNS(NS, 'circle');
+      c.setAttribute('r', nd.r);
+      c.setAttribute('fill', nd.r>40 ? nd.color : '#f8fafc');
+      c.setAttribute('fill-opacity', nd.r>40 ? '0.15' : '0.97');
+      c.setAttribute('stroke', nd.color);
+      c.setAttribute('stroke-width', nd.r>40 ? '2.5' : '2');
+      g.appendChild(c);
+      var em = document.createElementNS(NS, 'text');
+      em.setAttribute('text-anchor','middle');
+      em.setAttribute('dominant-baseline','middle');
+      em.setAttribute('font-size', nd.r>40?'26':'16');
+      em.setAttribute('y', nd.r>40?'-8':'-5');
+      em.textContent = nd.emoji;
+      g.appendChild(em);
+      var sub = document.createElementNS(NS, 'text');
+      sub.setAttribute('text-anchor','middle');
+      sub.setAttribute('dominant-baseline','middle');
+      sub.setAttribute('font-size', nd.r>40?'11':'9');
+      sub.setAttribute('font-weight','700');
+      sub.setAttribute('font-family',"'DM Mono',monospace");
+      sub.setAttribute('fill', nd.r>40?nd.color:'#334155');
+      sub.setAttribute('y', nd.r>40?'14':'11');
+      sub.textContent = nd.sub;
+      g.appendChild(sub);
+      /* drag */
+      var dragging=false, ox,oy,sx,sy;
+      g.addEventListener('mousedown', function(e) {
+        dragging=false; ox=e.clientX; oy=e.clientY; sx=nd.x; sy=nd.y;
+        e.preventDefault();
+        var mm = function(e2) {
+          if(Math.abs(e2.clientX-ox)>3||Math.abs(e2.clientY-oy)>3) dragging=true;
+          nd.x=Math.max(nd.r+4,Math.min(W-nd.r-4,sx+e2.clientX-ox));
+          nd.y=Math.max(nd.r+4,Math.min(H-nd.r-4,sy+e2.clientY-oy));
+          tick=Math.min(tick,40); updatePos();
+        };
+        var mu = function() {
+          window.removeEventListener('mousemove',mm);
+          window.removeEventListener('mouseup',mu);
+          if(!dragging){ tooltip.innerHTML=nd.info; tooltip.style.display='block'; tooltip.style.opacity='1'; }
+        };
+        window.addEventListener('mousemove',mm);
+        window.addEventListener('mouseup',mu);
+      });
+      g.addEventListener('mouseleave', hideTip);
+      nodeGroup.appendChild(g);
+      return { el:g };
+    });
+
+    /* legend chips */
+    var activePathway = null;
+    PATHWAYS.forEach(function(pw) {
+      var chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.id = 'chip-' + pw.id;
+      chip.style.border = '1px solid ' + pw.color + '55';
+      chip.style.color  = pw.color;
+      chip.innerHTML = '<span>' + pw.emoji + '</span><span>' + pw.label + '</span>';
+      chip.addEventListener('click', function() {
+        activePathway = (activePathway === pw.id) ? null : pw.id;
+        PATHWAYS.forEach(function(p2) {
+          var ch = document.getElementById('chip-'+p2.id);
+          if(!ch) return;
+          var active = !activePathway || activePathway===p2.id;
+          ch.style.opacity   = active ? '1' : '0.35';
+          ch.style.background = (activePathway===p2.id) ? p2.color+'22' : 'rgba(0,0,0,0.06)';
+        });
+        linkEls.forEach(function(le) {
+          le.el.style.opacity = (!activePathway || le.p===activePathway) ? '1' : '0.08';
+        });
+      });
+      legendRow.appendChild(chip);
+    });
+
+    /* force simulation */
+    var tick = 0;
+    function applyForces() {
+      var REP=4000, DAMP=0.78;
+      var fx=new Float32Array(NODES.length), fy=new Float32Array(NODES.length);
+      for(var i=0;i<NODES.length;i++) for(var j=i+1;j<NODES.length;j++) {
+        var dx=NODES[j].x-NODES[i].x, dy=NODES[j].y-NODES[i].y;
+        var dist=Math.sqrt(dx*dx+dy*dy)||0.1;
+        var minD=NODES[i].r+NODES[j].r+20;
+        var f=dist<minD?REP/(dist*dist):REP*0.3/(dist*dist);
+        fx[i]-=f*dx/dist; fy[i]-=f*dy/dist; fx[j]+=f*dx/dist; fy[j]+=f*dy/dist;
+      }
+      EDGES.forEach(function(e){
+        var si=NODES.findIndex(function(n){return n.id===e.s;});
+        var ti=NODES.findIndex(function(n){return n.id===e.t;});
+        if(si<0||ti<0) return;
+        var dx=NODES[ti].x-NODES[si].x, dy=NODES[ti].y-NODES[si].y;
+        var dist=Math.sqrt(dx*dx+dy*dy)||1;
+        var ideal=(NODES[si].r+NODES[ti].r)*3.0;
+        var f=0.008*(dist-ideal);
+        fx[si]+=f*dx/dist; fy[si]+=f*dy/dist; fx[ti]-=f*dx/dist; fy[ti]-=f*dy/dist;
+      });
+      NODES.forEach(function(n,i){
+        fx[i]+=(W/2-n.x)*0.004; fy[i]+=(H/2-n.y)*0.004;
+      });
+      NODES.forEach(function(n,i){
+        n.vx=((n.vx||0)+fx[i])*DAMP; n.vy=((n.vy||0)+fy[i])*DAMP;
+        n.x=Math.max(n.r+4,Math.min(W-n.r-4,n.x+n.vx));
+        n.y=Math.max(n.r+4,Math.min(H-n.r-4,n.y+n.vy));
+      });
+    }
+    function updatePos() {
+      linkEls.forEach(function(le){
+        var s=nodeMap[le.s], t=nodeMap[le.t]; if(!s||!t) return;
+        var dx=t.x-s.x, dy=t.y-s.y, dist=Math.sqrt(dx*dx+dy*dy)||1;
+        le.el.setAttribute('x1',s.x+dx/dist*(s.r+2));  le.el.setAttribute('y1',s.y+dy/dist*(s.r+2));
+        le.el.setAttribute('x2',t.x-dx/dist*(t.r+10)); le.el.setAttribute('y2',t.y-dy/dist*(t.r+10));
+      });
+      nodeEls.forEach(function(ne,i){
+        ne.el.setAttribute('transform','translate('+NODES[i].x+','+NODES[i].y+')');
+      });
+    }
+    function loop(){ if(tick<220){applyForces();tick++;} updatePos(); requestAnimationFrame(loop); }
+    loop();
+
+    /* tooltip helpers */
+    function showTip(e){ tooltip.style.display='block'; tooltip.style.opacity='1'; moveTip(e); document.addEventListener('mousemove',moveTip); }
+    function hideTip(){ tooltip.style.display='none'; tooltip.style.opacity='0'; document.removeEventListener('mousemove',moveTip); }
+    function moveTip(e){
+      var rect=wrapper.getBoundingClientRect();
+      var x=e.clientX-rect.left+16, y=e.clientY-rect.top+16;
+      if(x+290>W) x=e.clientX-rect.left-294;
+      if(y+140>H) y=e.clientY-rect.top-144;
+      tooltip.style.left=x+'px'; tooltip.style.top=y+'px';
+    }
+  }
+
+  window.addEventListener('load', function(){ setTimeout(init, 100); });
+})();
+</script>
+</body>
+</html>"""
+
+    # Graph card uses iframe (srcdoc) — the only reliable way to run custom JS
+    # inside a Dash app.  html.Script() is stripped by React and never executes.
+    graph_card = html.Div([
         html.Div([
-            kpi_card("Top Risk — Urgency", top_risk_urgency, "score", "Highest urgency factor",       "red"),
-            kpi_card("Rainfall Corr.",     rainfall_corr,    "",      "Dengue correlation index",     "amber"),
-            kpi_card("Lepto Env Route",    lepto_env_pct,    "%",     "Environmental/soil dominant",  "green"),
-            kpi_card("Rabies ABC+Vacc",    abc_vacc_eff,     "%",     "Reduction vs no intervention", "blue"),
-            kpi_card("Full OH 2030",       oh_reduction,     "%",     "Burden vs doing nothing",      "green"),
-        ], style={"display": "grid", "gridTemplateColumns": "repeat(5,1fr)", "gap": "12px", "marginBottom": "20px"}),
-
-        html.Div([
-            html.P([
-                html.Strong("One Health Nexus: "),
-                "Household effluent flows into the lake (Human→Environment), livestock excreta contaminates "
-                "soil and water (Animal→Environment), contaminated water drives disease burden (Environment→Human). "
-                "Full One Health intervention reduces all pillar-to-pillar interaction scores by 40–65%. "
-                "Monsoon seasons are the highest-risk windows for dengue, malaria, and leptospirosis simultaneously.",
-            ], style={"fontSize": "13px", "color": MUTED, "lineHeight": "1.7", "margin": "0"}),
+            html.Span(
+                "Click pathway to highlight \u00b7 Hover nodes & edges \u00b7 Drag to reposition",
+                style={"fontSize": "11px", "color": MUTED,
+                       "fontFamily": "'DM Mono',monospace", "letterSpacing": "0.4px"},
+            ),
         ], style={
-            "background": rgba(C_BLUE, 0.04), "border": f"1px solid {rgba(C_BLUE, 0.2)}",
-            "borderLeft": f"4px solid {C_BLUE}", "borderRadius": "10px",
-            "padding": "14px 18px", "marginBottom": "20px",
+            "padding": "20px 24px 12px",
+            "display": "flex", "alignItems": "center",
+            "justifyContent": "space-between", "flexWrap": "wrap", "gap": "12px",
         }),
+        html.Iframe(
+            srcDoc=_graph_iframe_html,
+            style={
+                "width": "100%",
+                "height": "580px",
+                "border": "none",
+                "display": "block",
+            },
+        ),
+    ], style={
+        **CARD_STYLE,
+        "padding": "0", "overflow": "hidden", "borderRadius": "20px",
+        "marginBottom": "24px",
+    })
 
-        html.Div([
-            html.Div([
-                html.Div([
-                    html.Span("👤→🌿", style={"fontSize": "14px"}),
-                    html.Span("Human → Environment", style={"fontSize": "11px", "fontWeight": "600", "color": C_BLUE, "marginLeft": "6px"}),
-                ], style={"display": "flex", "alignItems": "center"}),
-                html.P(f"Effluent TDS {effluent_tds} ppm | TNTC at lake entries | Open borewell breeding",
-                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
-            ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_BLUE}"}),
-            html.Div([
-                html.Div([
-                    html.Span("🐾→🌿", style={"fontSize": "14px"}),
-                    html.Span("Animal → Environment", style={"fontSize": "11px", "fontWeight": "600", "color": C_GREEN, "marginLeft": "6px"}),
-                ], style={"display": "flex", "alignItems": "center"}),
-                html.P("Horse stable TNTC | Doxy residues in soil-water | E. coli from manure",
-                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
-            ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_GREEN}"}),
-            html.Div([
-                html.Div([
-                    html.Span("🌿→👤", style={"fontSize": "14px"}),
-                    html.Span("Environment → Human", style={"fontSize": "11px", "fontWeight": "600", "color": C_RED, "marginLeft": "6px"}),
-                ], style={"display": "flex", "alignItems": "center"}),
-                html.P(f"AQI {fmt_num(aqi_val)} + {humidity_val}% humidity | Contaminated lake water consumed | Monsoon vectors",
-                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
-            ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_RED}"}),
-            html.Div([
-                html.Div([
-                    html.Span("🐾→👤", style={"fontSize": "14px"}),
-                    html.Span("Animal → Human", style={"fontSize": "11px", "fontWeight": "600", "color": C_PURPLE, "marginLeft": "6px"}),
-                ], style={"display": "flex", "alignItems": "center"}),
-                html.P("Rabies post-ABC | Leptospirosis risk | AMR food-chain risk",
-                       style={"fontSize": "10px", "color": MUTED, "margin": "4px 0 0"}),
-            ], style={**CARD_STYLE, "borderLeft": f"3px solid {C_PURPLE}"}),
-        ], style={"display": "grid", "gridTemplateColumns": "repeat(4,1fr)", "gap": "12px", "marginBottom": "20px"}),
+    # ── BUILD PAGE ────────────────────────────────────────────────────────────
+    return html.Div([
+        section_banner(
+            "Interconnectedness",
+            "HOW HUMAN \u00b7 ANIMAL \u00b7 ENVIRONMENT HEALTH ARE LINKED IN BETTAHALASURU"
+        ),
 
+        graph_card,
+
+        # ROW 1: Risk Matrix + Rainfall vs Disease
         grid2([
-            chart_card(dcc.Graph(figure=fig_zoo,  config={"displayModeBar": False}), "red"),
-            chart_card(dcc.Graph(figure=fig_rain, config={"displayModeBar": False}), "green"),
+            html.Div([
+                card_top_bar(C_BLUE),
+                html.Div(style={"height": "6px"}),
+                html.P("Bubble size = urgency score \u00b7 Hover for details", style={
+                    "fontSize": "10px", "color": MUTED,
+                    "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
+                }),
+                dcc.Graph(figure=fig_bub, config={"displayModeBar": False},
+                          style={"height": "300px"}),
+            ], style=CARD_STYLE),
+
+            html.Div([
+                card_top_bar(C_GREEN),
+                html.Div(style={"height": "6px"}),
+                html.P("Environment \u2192 Human pathway \u00b7 2020\u20132024", style={
+                    "fontSize": "10px", "color": MUTED,
+                    "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
+                }),
+                dcc.Graph(figure=fig_rain, config={"displayModeBar": False},
+                          style={"height": "260px"}),
+            ], style=CARD_STYLE),
         ]),
+
+        # ROW 2: Zoonotic + Cross-Pillar Polar
         grid2([
-            chart_card(dcc.Graph(figure=fig_int,  config={"displayModeBar": False}), "amber"),
-            chart_card(dcc.Graph(figure=fig_bub,  config={"displayModeBar": False}), "blue"),
+            html.Div([
+                card_top_bar(C_RED),
+                html.Div(style={"height": "6px"}),
+                html.P("Stacked pathways by route and severity", style={
+                    "fontSize": "10px", "color": MUTED,
+                    "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
+                }),
+                dcc.Graph(figure=fig_zoo, config={"displayModeBar": False},
+                          style={"height": "260px"}),
+            ], style=CARD_STYLE),
+
+            html.Div([
+                card_top_bar(C_PURPLE),
+                html.Div(style={"height": "6px"}),
+                card_title("Cross-Pillar Contamination Index"),
+                html.P(
+                    "Each segment = a contamination pathway between pillars. "
+                    "Larger area = higher risk (0\u2013100 scale).",
+                    style={"fontSize": "10px", "color": MUTED,
+                           "fontFamily": "'DM Mono',monospace", "margin": "0 0 4px"}
+                ),
+                html.Div([
+                    html.Span("\ud83d\udd34 High Risk (>70)",       style={"fontSize":"9px","padding":"2px 7px","borderRadius":"4px","background":"rgba(255,112,67,0.15)","color":"#b91c1c","fontFamily":"'DM Mono',monospace","marginRight":"4px"}),
+                    html.Span("\ud83d\udfe1 Medium Risk (50\u201370)",style={"fontSize":"9px","padding":"2px 7px","borderRadius":"4px","background":"rgba(255,202,40,0.15)","color":"#92400e","fontFamily":"'DM Mono',monospace","marginRight":"4px"}),
+                    html.Span("\ud83d\udfe2 Lower Risk (<50)",       style={"fontSize":"9px","padding":"2px 7px","borderRadius":"4px","background":"rgba(105,240,174,0.15)","color":"#15803d","fontFamily":"'DM Mono',monospace","marginRight":"4px"}),
+                    html.Span("\ud83d\udd35 Managed",                style={"fontSize":"9px","padding":"2px 7px","borderRadius":"4px","background":"rgba(79,195,247,0.15)","color":"#0284c7","fontFamily":"'DM Mono',monospace"}),
+                ], style={"display":"flex","flexWrap":"wrap","gap":"4px","marginBottom":"8px"}),
+                dcc.Graph(figure=fig_polar, config={"displayModeBar": False},
+                          style={"height": "260px"}),
+                html.Div(
+                    "\u26a0 Critical: Water TDS (Human\u2192Env), Soil E. coli (Animal\u2192Env), "
+                    "Lake contamination (Env\u2192Human) and Effluent discharge (Human\u2192Env) "
+                    "all score above 70 \u2014 indicating urgent intervention needed.",
+                    style={
+                        "marginTop": "8px", "fontSize": "10px", "color": MUTED,
+                        "lineHeight": "1.6", "padding": "8px",
+                        "background": "rgba(255,112,67,0.05)", "borderRadius": "6px",
+                        "borderLeft": f"3px solid {C_RED}",
+                    }
+                ),
+            ], style=CARD_STYLE),
+        ]),
+
+        # ROW 3: Interaction Strength + Projected Outcome
+        grid2([
+            html.Div([
+                card_top_bar(C_AMBER),
+                html.Div(style={"height": "6px"}),
+                html.P("Bidirectional flow scores between pillars", style={
+                    "fontSize": "10px", "color": MUTED,
+                    "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
+                }),
+                dcc.Graph(figure=fig_int, config={"displayModeBar": False},
+                          style={"height": "260px"}),
+            ], style=CARD_STYLE),
+
+            html.Div([
+                card_top_bar(C_BLUE),
+                html.Div(style={"height": "6px"}),
+                html.P("Composite risk score over 5 years", style={
+                    "fontSize": "10px", "color": MUTED,
+                    "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
+                }),
+                dcc.Graph(figure=fig_proj, config={"displayModeBar": False},
+                          style={"height": "260px"}),
+            ], style=CARD_STYLE),
         ]),
     ])
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # APP LAYOUT
