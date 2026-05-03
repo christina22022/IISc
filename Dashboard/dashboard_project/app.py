@@ -2086,13 +2086,13 @@ def _parse_disease_insights(di_df):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def page_human(d):
-    md  = d.get("majorDiseases",        pd.DataFrame())
-    vt  = d.get("vectorDiseaseTrend",   pd.DataFrame())
-    db  = d.get("diseaseBurden",        pd.DataFrame())
-    sc  = d.get("phcScreeningPrograms", pd.DataFrame())
-    vi  = d.get("vectorInsights",       pd.DataFrame())
-    kpi = d.get("kpi_data",             pd.DataFrame())
-    di  = d.get("disease_insights",     pd.DataFrame())
+    md = d.get("majorDiseases", pd.DataFrame())
+    vt = d.get("vectorDiseaseTrend", pd.DataFrame())
+    db = d.get("diseaseBurden", pd.DataFrame())
+    sc = d.get("phcScreeningPrograms", pd.DataFrame())
+    vi = d.get("vectorInsights", pd.DataFrame())
+    kpi = d.get("kpi_data", pd.DataFrame())
+    di = d.get("disease_insights", pd.DataFrame())
 
     h_population = kpi_val_from_wide(
         kpi,
@@ -2104,8 +2104,7 @@ def page_human(d):
 
     h_male = kpi_val_from_wide(
         kpi,
-        ["male", "Male", "malePop", "malePopulation", "male_population",
-         "Male Population", "Males"],
+        ["male", "Male", "malePop", "malePopulation", "male_population", "Male Population", "Males"],
         default=None,
     )
     if h_male is None:
@@ -2113,8 +2112,7 @@ def page_human(d):
 
     h_female = kpi_val_from_wide(
         kpi,
-        ["female", "Female", "femalePop", "femalePopulation", "female_population",
-         "Female Population", "Females"],
+        ["female", "Female", "femalePop", "femalePopulation", "female_population", "Female Population", "Females"],
         default=None,
     )
     if h_female is None:
@@ -2122,44 +2120,51 @@ def page_human(d):
 
     h_phc_services = kpi_val_from_wide(
         kpi,
-        ["phcServices", "phc_services", "PHC Services", "screeningPrograms",
-         "screening_programs", "Screening Programs", "phcService"],
+        ["phcServices", "phc_services", "PHC Services", "screeningPrograms", "screening_programs", "Screening Programs", "phcService"],
         default=None,
     )
     if h_phc_services is None:
         h_phc_services = kpi_val(kpi, ["PHC Services", "Screening Programs", "Services"], "8+")
 
+    # ── comma-format population number if it's numeric ───────────────────────
+    def fmt_num(val):
+        try:
+            return f"{int(str(val).replace(',', '')):,}"
+        except Exception:
+            return str(val)
+
+    h_population_fmt = fmt_num(h_population)
+    h_male_fmt       = fmt_num(h_male)
+    h_female_fmt     = fmt_num(h_female)
+
     di_parsed = _parse_disease_insights(di)
 
-    malaria_data        = di_parsed.get("malaria", {})
-    malaria_cases       = malaria_data.get("value",  "30–50/yr")
-    malaria_insight     = malaria_data.get("notes",  "Peak during monsoon. RDT used at PHC.")
+    malaria_data      = di_parsed.get("malaria", {})
+    malaria_cases     = malaria_data.get("value", "30–50/yr")
+    malaria_insight   = malaria_data.get("notes", "Peak during monsoon. RDT used at PHC.")
 
-    dengue_data         = di_parsed.get("dengue", {})
-    dengue_cases        = dengue_data.get("value",   "60 cases")
-    dengue_insight      = dengue_data.get("notes",   "2022 spike — high rainfall, standing water.")
+    dengue_data       = di_parsed.get("dengue", {})
+    dengue_cases      = dengue_data.get("value", "60 cases")
+    dengue_insight    = dengue_data.get("notes", "2022 spike — high rainfall, standing water.")
 
     chikungunya_data    = di_parsed.get("chikungunya", {})
-    chikungunya_cases   = chikungunya_data.get("value",  "10–25/yr")
-    chikungunya_insight = chikungunya_data.get("notes",  "Sporadic post-monsoon. Nets distributed.")
+    chikungunya_cases   = chikungunya_data.get("value", "10–25/yr")
+    chikungunya_insight = chikungunya_data.get("notes", "Sporadic post-monsoon. Nets distributed.")
 
-    rainfall_data       = di_parsed.get("rainfall", {})
-    rainfall_val        = rainfall_data.get("value",   "High correlation")
-    rainfall_insight    = rainfall_data.get("notes",   "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)")
+    rainfall_data    = di_parsed.get("rainfall", {})
+    rainfall_val     = rainfall_data.get("value", "High correlation")
+    rainfall_insight = rainfall_data.get("notes", "↑ Rainfall → ↑ Vector breeding → ↑ Disease burden (2022 confirmed)")
 
     vi_disease_col = find_col(vi, ["disease", "Disease", "diseaseName", "disease_name"])
-    vi_cases_col   = find_col(vi, ["casesRange", "cases_range", "cases", "caseRange",
-                                   "Cases", "range", "value"])
-    vi_insight_col = find_col(vi, ["insight", "description", "note", "Insight",
-                                   "Description", "finding"])
+    vi_cases_col   = find_col(vi, ["casesRange", "cases_range", "cases", "caseRange", "Cases", "range", "value"])
+    vi_insight_col = find_col(vi, ["insight", "description", "note", "Insight", "Description", "finding"])
 
     def get_vi_fallback(disease_name, col, default):
         if not col or vi.empty or vi_disease_col is None:
             return default
         try:
             mask = (
-                vi[vi_disease_col]
-                .astype(str).str.strip().str.lower()
+                vi[vi_disease_col].astype(str).str.strip().str.lower()
                 == disease_name.lower()
             )
             row = vi[mask]
@@ -2171,22 +2176,19 @@ def page_human(d):
         return default
 
     if not malaria_cases or malaria_cases == "—":
-        malaria_cases   = get_vi_fallback("malaria",     vi_cases_col,   "30–50/yr")
+        malaria_cases = get_vi_fallback("malaria", vi_cases_col, "30–50/yr")
     if not malaria_insight or malaria_insight == "—":
-        malaria_insight = get_vi_fallback("malaria",     vi_insight_col, "Peak during monsoon. RDT used at PHC.")
-
+        malaria_insight = get_vi_fallback("malaria", vi_insight_col, "Peak during monsoon. RDT used at PHC.")
     if not dengue_cases or dengue_cases == "—":
-        dengue_cases    = get_vi_fallback("dengue",      vi_cases_col,   "60 cases")
+        dengue_cases = get_vi_fallback("dengue", vi_cases_col, "60 cases")
     if not dengue_insight or dengue_insight == "—":
-        dengue_insight  = get_vi_fallback("dengue",      vi_insight_col, "2022 spike — high rainfall, standing water.")
-
+        dengue_insight = get_vi_fallback("dengue", vi_insight_col, "2022 spike — high rainfall, standing water.")
     if not chikungunya_cases or chikungunya_cases == "—":
-        chikungunya_cases   = get_vi_fallback("chikungunya", vi_cases_col,   "10–25/yr")
+        chikungunya_cases = get_vi_fallback("chikungunya", vi_cases_col, "10–25/yr")
     if not chikungunya_insight or chikungunya_insight == "—":
         chikungunya_insight = get_vi_fallback("chikungunya", vi_insight_col, "Sporadic post-monsoon. Nets distributed.")
-
     if not rainfall_val or rainfall_val == "—":
-        rainfall_val    = get_vi_fallback("rainfall",    vi_cases_col,   "High correlation")
+        rainfall_val = get_vi_fallback("rainfall", vi_cases_col, "High correlation")
     if not rainfall_insight or rainfall_insight == "—":
         rainfall_insight = get_vi_fallback(
             "rainfall", vi_insight_col,
@@ -2214,27 +2216,26 @@ def page_human(d):
         return default_pct, default_sub
 
     db_hyp_pct,  db_hyp_sub  = get_db("hypertension",  72, "Rising (age 40+)")
-    db_diab_pct, db_diab_sub = get_db("diabetes",       65, "Growing — lifestyle factors")
-    db_tb_pct,   db_tb_sub   = get_db("tuberculosis",   45, "Endemic — lower SES groups")
-    db_anm_pct,  db_anm_sub  = get_db("anemia",         55, "Nutritional deficiency")
-    db_mal_pct,  db_mal_sub  = get_db("malaria",         35, "30–50 cases/yr")
-    db_den_pct,  db_den_sub  = get_db("dengue",          48, "Cases — peak season")
-    db_lep_pct,  db_lep_sub  = get_db("leptospirosis",   18, "Monsoon linked")
+    db_diab_pct, db_diab_sub = get_db("diabetes",      65, "Growing — lifestyle factors")
+    db_tb_pct,   db_tb_sub   = get_db("tuberculosis",  45, "Endemic — lower SES groups")
+    db_anm_pct,  db_anm_sub  = get_db("anemia",        55, "Nutritional deficiency")
+    db_mal_pct,  db_mal_sub  = get_db("malaria",       35, "30–50 cases/yr")
+    db_den_pct,  db_den_sub  = get_db("dengue",        48, "Cases — peak season")
+    db_lep_pct,  db_lep_sub  = get_db("leptospirosis", 18, "Monsoon linked")
 
-    badge_map_bg   = {"Active": "good", "Seasonal": "warn", "Periodic": "info"}
+    badge_map_bg = {"Active": "good", "Seasonal": "warn", "Periodic": "info"}
     screening_rows = []
     if not sc.empty:
         for _, row in sc.iterrows():
             screening_rows.append([
                 (row.get("screeningType", ""), 2),
-                (row.get("frequency",      ""), 1),
-                (badge(row.get("status", ""),
-                       badge_map_bg.get(row.get("status", ""), "info")), 1),
+                (row.get("frequency", ""), 1),
+                (badge(row.get("status", ""), badge_map_bg.get(row.get("status", ""), "info")), 1),
             ])
 
     di_text_col  = find_col(di, ["insight_text", "insight", "finding", "text"])
     di_color_col = find_col(di, ["color_key", "color", "pillar"])
-    color_lk     = {"blue": C_BLUE, "red": C_RED, "amber": C_AMBER, "green": C_GREEN}
+    color_lk = {"blue": C_BLUE, "red": C_RED, "amber": C_AMBER, "green": C_GREEN}
     disease_insight_rows = []
     if di_text_col and not di.empty:
         for _, row in di.iterrows():
@@ -2252,24 +2253,21 @@ def page_human(d):
         print(md.head())
 
     dis_col  = find_col(md, [
-        "disease", "Disease", "diseaseName", "disease_name",
-        "name", "Name", "category", "Category", "label", "Label"
+        "disease", "Disease", "diseaseName", "disease_name", "name", "Name",
+        "category", "Category", "label", "Label",
     ])
     case_col = find_col(md, [
-        "cases", "Cases", "case", "Case",
-        "value", "Value", "score", "Score",
+        "cases", "Cases", "case", "Case", "value", "Value", "score", "Score",
         "prevalenceScore", "prevalence_score", "prevalence", "Prevalence",
-        "count", "Count", "burden", "Burden"
+        "count", "Count", "burden", "Burden",
     ])
 
-    fig_dis  = empty_fig("No disease case-load data available")
-
+    fig_dis = empty_fig("No disease case-load data available")
     if dis_col and case_col:
         md_work = md.copy()
         md_work[case_col] = pd.to_numeric(md_work[case_col], errors="coerce")
         md_s = (
-            md_work
-            .dropna(subset=[dis_col, case_col])
+            md_work.dropna(subset=[dis_col, case_col])
             .sort_values(case_col, ascending=True)
         )
         n = len(md_s)
@@ -2278,42 +2276,26 @@ def page_human(d):
             palette = []
             for i in range(n):
                 frac = i / max(n - 1, 1)
-                if frac < 0.35:
-                    palette.append("#22c55e")
-                elif frac < 0.65:
-                    palette.append("#f59e0b")
-                elif frac < 0.85:
-                    palette.append("#f97316")
-                else:
-                    palette.append("#ef4444")
+                if frac < 0.35:   palette.append("#22c55e")
+                elif frac < 0.65: palette.append("#f59e0b")
+                elif frac < 0.85: palette.append("#f97316")
+                else:             palette.append("#ef4444")
 
             fig_dis = go.Figure()
             fig_dis.add_trace(go.Bar(
-                x=md_s[case_col],
-                y=md_s[dis_col],
+                x=md_s[case_col], y=md_s[dis_col],
                 orientation="h",
-                marker=dict(
-                    color=palette,
-                    line_width=0,
-                    cornerradius=8,
-                    opacity=0.88,
-                ),
+                marker=dict(color=palette, line_width=0, cornerradius=8, opacity=0.88),
                 hovertemplate="<b>%{y}</b><br>Score: %{x}<extra></extra>",
             ))
             fig_dis.add_vline(
-                x=60,
-                line_dash="dot",
-                line_color=rgba(C_RED, 0.45),
-                line_width=1.5,
+                x=60, line_dash="dot", line_color=rgba(C_RED, 0.45), line_width=1.5,
                 annotation_text="High burden (>60)",
                 annotation_font=dict(color=C_RED, size=9),
                 annotation_position="top right",
             )
             fig_dis.add_vline(
-                x=40,
-                line_dash="dot",
-                line_color=rgba(C_AMBER, 0.45),
-                line_width=1.5,
+                x=40, line_dash="dot", line_color=rgba(C_AMBER, 0.45), line_width=1.5,
                 annotation_text="Moderate (40)",
                 annotation_font=dict(color=C_AMBER, size=9),
                 annotation_position="bottom right",
@@ -2323,193 +2305,74 @@ def page_human(d):
                 xaxis_title="Prevalence Score (0 = absent, 100 = very high)",
                 xaxis=dict(
                     range=[0, 110],
-                    gridcolor="rgba(0,0,0,0.04)",
-                    showgrid=True,
-                    zeroline=False,
-                    tickfont_color=MUTED,
-                    title_font_color=MUTED,
+                    gridcolor="rgba(0,0,0,0.04)", showgrid=True, zeroline=False,
+                    tickfont_color=MUTED, title_font_color=MUTED,
                 ),
                 yaxis=dict(
-                    gridcolor="rgba(0,0,0,0)",
-                    linecolor=BORDER,
-                    tickfont=dict(color=TEXT, size=11),
-                    title_font_color=MUTED,
+                    gridcolor="rgba(0,0,0,0)", linecolor=BORDER,
+                    tickfont=dict(color=TEXT, size=11), title_font_color=MUTED,
                 ),
                 margin=dict(l=10, r=24, t=56, b=44),
                 bargap=0.32,
             ))
             fig_dis.add_annotation(
                 text=(
-                    "<span style='color:#ef4444'>● High burden (>60)</span>  "
-                    "<span style='color:#f59e0b'>● Moderate (40–60)</span>  "
+                    "<span style='color:#ef4444'>● High burden (>60)</span> "
+                    "<span style='color:#f59e0b'>● Moderate (40–60)</span> "
                     "<span style='color:#22c55e'>● Low (<40)</span>"
                 ),
-                xref="paper", yref="paper",
-                x=0.0, y=-0.10,
-                xanchor="left",
+                xref="paper", yref="paper", x=0.0, y=-0.10, xanchor="left",
                 showarrow=False,
                 font=dict(size=9, family="'DM Mono',monospace", color=MUTED),
             )
     else:
-        print(f"[WARN] majorDiseases: could not find disease or cases columns. Available: {list(md.columns)}")
+        print(f"[WARN] majorDiseases: could not find columns. Available: {list(md.columns)}")
 
     year_col = find_col(vt, ["year", "Year"])
     fig_vec  = empty_fig("No vector disease trend data available")
-
     if year_col:
         vt_plot = coerce_numeric(vt, [year_col])
-        fig_vec  = go.Figure()
-
+        fig_vec = go.Figure()
         SERIES = [
-            (find_col(vt, ["malaria",       "Malaria"]),       "#3b82f6", "Malaria",       True),
-            (find_col(vt, ["dengue",        "Dengue"]),        "#ef4444", "Dengue",        True),
-            (find_col(vt, ["chikungunya",   "Chikungunya"]),   "#a855f7", "Chikungunya",   False),
-            (find_col(vt, ["leptospirosis", "Leptospirosis"]), "#22c55e", "Leptospirosis", False),
+            (find_col(vt, ["malaria",      "Malaria"]),      "#3b82f6", "Malaria",      True),
+            (find_col(vt, ["dengue",       "Dengue"]),       "#ef4444", "Dengue",       True),
+            (find_col(vt, ["chikungunya",  "Chikungunya"]),  "#a855f7", "Chikungunya",  False),
+            (find_col(vt, ["leptospirosis","Leptospirosis"]),"#22c55e", "Leptospirosis",False),
         ]
-
         for col, color, name, do_fill in SERIES:
-            if not col:
-                continue
+            if not col: continue
             vt_plot = coerce_numeric(vt_plot, [col])
             valid   = vt_plot[[year_col, col]].dropna()
-            if valid.empty:
-                continue
+            if valid.empty: continue
             fig_vec.add_trace(go.Scatter(
-                x=valid[year_col],
-                y=valid[col],
-                name=name,
+                x=valid[year_col], y=valid[col], name=name,
                 mode="lines+markers",
                 line=dict(color=color, width=2.5, shape="spline", smoothing=1.3),
-                marker=dict(size=8, color=color,
-                            line=dict(width=2, color="#ffffff"), symbol="circle"),
+                marker=dict(size=8, color=color, line=dict(width=2, color="#ffffff"), symbol="circle"),
                 fill="tozeroy" if do_fill else "none",
                 fillcolor=rgba(color, 0.06) if do_fill else "rgba(0,0,0,0)",
                 hovertemplate=f"<b>{name}</b><br>Year: %{{x}}<br>Cases: %{{y}}<extra></extra>",
             ))
-
         if not fig_vec.data:
             fig_vec = empty_fig("No vector disease trend data available")
         else:
             fig_vec.update_layout(**PL(
                 "Vector-Borne Disease Trend (Annual Cases)",
-                yaxis_title="Cases",
-                xaxis_title="Year",
+                yaxis_title="Cases", xaxis_title="Year",
                 hovermode="x unified",
-                legend=dict(
-                    orientation="h", x=0, y=1.10,
-                    bgcolor="rgba(0,0,0,0)", font_size=10,
-                    itemsizing="constant",
-                ),
+                legend=dict(orientation="h", x=0, y=1.10, bgcolor="rgba(0,0,0,0)",
+                            font_size=10, itemsizing="constant"),
                 margin=dict(l=20, r=20, t=64, b=20),
             ))
 
+    # ════════════════════════════════════════════════════════════════════
+    # HEADER
+    # ════════════════════════════════════════════════════════════════════
     header = section_banner("Human Pillar", "PRIMARY HEALTH CENTRE · BETTAHALASURU")
 
-    population_card = html.Div([
-        card_top_bar(C_BLUE),
-        html.P("TOTAL POPULATION", style={
-            "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
-            "fontWeight": "700", "color": MUTED, "letterSpacing": "1.2px",
-            "textTransform": "uppercase", "margin": "10px 0 6px",
-        }),
-        html.Div(str(h_population), style={
-            "fontSize": "48px", "fontWeight": "800", "color": C_BLUE,
-            "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
-            "letterSpacing": "-2px", "marginBottom": "14px",
-        }),
-        html.Div([
-            html.Div([
-                html.Span("♂ MALE", style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "9px",
-                    "fontWeight": "700", "color": C_BLUE,
-                    "letterSpacing": "0.8px", "display": "block", "marginBottom": "2px",
-                }),
-                html.Span(str(h_male), style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "20px",
-                    "fontWeight": "700", "color": C_BLUE,
-                }),
-            ], style={
-                "background": rgba(C_BLUE, 0.08),
-                "border": f"1px solid {rgba(C_BLUE, 0.25)}",
-                "borderRadius": "10px", "padding": "8px 18px",
-                "flex": "1", "textAlign": "center",
-            }),
-            html.Div([
-                html.Span("♀ FEMALE", style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "9px",
-                    "fontWeight": "700", "color": C_PURPLE,
-                    "letterSpacing": "0.8px", "display": "block", "marginBottom": "2px",
-                }),
-                html.Span(str(h_female), style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "20px",
-                    "fontWeight": "700", "color": C_PURPLE,
-                }),
-            ], style={
-                "background": rgba(C_PURPLE, 0.08),
-                "border": f"1px solid {rgba(C_PURPLE, 0.25)}",
-                "borderRadius": "10px", "padding": "8px 18px",
-                "flex": "1", "textAlign": "center",
-            }),
-        ], style={"display": "flex", "gap": "10px"}),
-        html.P("Bettahalasuru Village, Karnataka", style={
-            "fontSize": "11px", "color": MUTED, "margin": "8px 0 0",
-        }),
-    ], style={
-        **CARD_STYLE,
-        "padding": "18px 22px 22px",
-        "boxShadow": f"0 4px 24px {rgba(C_BLUE, 0.10)}",
-        "flex": "1",
-    })
-
-    phc_services_card = html.Div([
-        card_top_bar(C_GREEN),
-        html.P("PHC SERVICES", style={
-            "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
-            "fontWeight": "700", "color": MUTED, "letterSpacing": "1.2px",
-            "textTransform": "uppercase", "margin": "10px 0 6px",
-        }),
-        html.Div(str(h_phc_services), style={
-            "fontSize": "56px", "fontWeight": "800", "color": C_GREEN,
-            "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
-            "letterSpacing": "-2px", "marginBottom": "12px",
-        }),
-        html.P("Screening programs active", style={
-            "fontSize": "12px", "color": MUTED, "margin": "0 0 16px",
-        }),
-        html.Div([
-            html.Span("Blood Pressure", style={
-                "fontSize": "10px", "padding": "3px 9px", "borderRadius": "20px",
-                "background": rgba(C_GREEN, 0.10),
-                "border": f"1px solid {rgba(C_GREEN, 0.25)}",
-                "color": "#166534", "marginRight": "5px",
-                "fontFamily": "'DM Mono',monospace",
-            }),
-            html.Span("Malaria RDT", style={
-                "fontSize": "10px", "padding": "3px 9px", "borderRadius": "20px",
-                "background": rgba(C_GREEN, 0.10),
-                "border": f"1px solid {rgba(C_GREEN, 0.25)}",
-                "color": "#166534", "marginRight": "5px",
-                "fontFamily": "'DM Mono',monospace",
-            }),
-            html.Span("+ more", style={
-                "fontSize": "10px", "padding": "3px 9px", "borderRadius": "20px",
-                "background": "rgba(0,0,0,0.05)",
-                "border": f"1px solid {BORDER}",
-                "color": MUTED, "fontFamily": "'DM Mono',monospace",
-            }),
-        ], style={"display": "flex", "flexWrap": "wrap", "gap": "5px"}),
-    ], style={
-        **CARD_STYLE,
-        "padding": "18px 22px 22px",
-        "boxShadow": f"0 4px 24px {rgba(C_GREEN, 0.08)}",
-        "flex": "1",
-    })
-
-    top_kpi_row = html.Div(
-        [population_card, phc_services_card],
-        style={"display": "flex", "gap": "20px", "marginBottom": "28px"},
-    )
-
+    # ════════════════════════════════════════════════════════════════════
+    # VECTOR MINI BLOCKS
+    # ════════════════════════════════════════════════════════════════════
     VECTOR_DEFS = [
         ("🦟", "MALARIA",       C_BLUE,   malaria_cases,     malaria_insight),
         ("🦟", "DENGUE",        C_RED,    dengue_cases,      dengue_insight),
@@ -2519,96 +2382,233 @@ def page_human(d):
 
     def vector_mini(icon, title, color_hex, value_str, insight_str, is_last=False):
         return html.Div([
+            # Thin colored top bar — flush via parent overflow:hidden
             html.Div(style={
-                "height": "2px", "background": color_hex,
-                "borderRadius": "1px", "marginBottom": "10px", "opacity": "0.7",
+                "height": "3px",
+                "background": color_hex,
+                "marginBottom": "10px",
             }),
+            # Icon + label
             html.Div([
-                html.Span(icon,  style={"fontSize": "15px"}),
+                html.Span(icon, style={"fontSize": "11px"}),
                 html.Span(title, style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "9px",
-                    "fontWeight": "700", "color": color_hex,
-                    "letterSpacing": "0.8px", "textTransform": "uppercase",
+                    "fontFamily": "'DM Mono',monospace",
+                    "fontSize": "8px",
+                    "fontWeight": "700",
+                    "color": color_hex,
+                    "letterSpacing": "0.7px",
+                    "textTransform": "uppercase",
                 }),
-            ], style={"display": "flex", "alignItems": "center",
-                      "gap": "5px", "marginBottom": "6px"}),
-            html.P(str(value_str), style={
-                "fontFamily": "'DM Mono',monospace", "fontSize": "20px",
-                "fontWeight": "700", "color": color_hex,
-                "margin": "0 0 5px", "lineHeight": "1",
+            ], style={
+                "display": "flex", "alignItems": "center", "gap": "4px",
+                "marginBottom": "5px",
+                "paddingLeft": "12px", "paddingRight": "12px",
             }),
+            # Large value
+            html.P(str(value_str), style={
+                "fontFamily": "'DM Mono',monospace",
+                "fontSize": "17px",
+                "fontWeight": "800",
+                "color": color_hex,
+                "margin": "0 0 5px",
+                "lineHeight": "1.1",
+                "letterSpacing": "-0.3px",
+                "paddingLeft": "12px", "paddingRight": "12px",
+            }),
+            # Muted description
             html.P(str(insight_str), style={
-                "fontSize": "10px", "color": MUTED,
-                "margin": "0", "lineHeight": "1.55",
+                "fontSize": "9.5px",
+                "color": MUTED,
+                "margin": "0 0 14px",
+                "lineHeight": "1.5",
+                "paddingLeft": "12px", "paddingRight": "12px",
             }),
         ], style={
             "flex": "1",
             "minWidth": "0",
-            "padding": "0 20px 0 0" if not is_last else "0",
             "borderRight": f"1px solid {BORDER}" if not is_last else "none",
         })
 
     vector_mini_cards = [
         vector_mini(
-            icon=icon,
-            title=title,
-            color_hex=color,
-            value_str=value,
-            insight_str=insight,
+            icon=icon, title=title, color_hex=color,
+            value_str=value, insight_str=insight,
             is_last=(i == len(VECTOR_DEFS) - 1),
         )
         for i, (icon, title, color, value, insight) in enumerate(VECTOR_DEFS)
     ]
 
-    vector_cluster = html.Div([
+    # ════════════════════════════════════════════════════════════════════
+    # CARD 1 — TOTAL POPULATION
+    # ════════════════════════════════════════════════════════════════════
+    population_card = html.Div([
+        card_top_bar(C_BLUE),
+        html.P("TOTAL POPULATION", style={
+            "fontFamily": "'DM Mono',monospace",
+            "fontSize": "10px", "fontWeight": "700",
+            "color": MUTED, "letterSpacing": "1.2px",
+            "textTransform": "uppercase",
+            "margin": "10px 0 4px",
+        }),
+        html.Div(h_population_fmt, style={
+            "fontSize": "38px", "fontWeight": "800",
+            "color": C_BLUE, "lineHeight": "1",
+            "fontFamily": "'DM Mono',monospace",
+            "letterSpacing": "-1.5px",
+            "marginBottom": "12px",
+        }),
+        # Compact male / female badge row
+        html.Div([
+            html.Div([
+                html.Span("♂ MALE", style={
+                    "fontFamily": "'DM Mono',monospace",
+                    "fontSize": "8px", "fontWeight": "700",
+                    "color": C_BLUE, "letterSpacing": "0.6px",
+                    "display": "block", "marginBottom": "1px",
+                }),
+                html.Span(h_male_fmt, style={
+                    "fontFamily": "'DM Mono',monospace",
+                    "fontSize": "16px", "fontWeight": "700",
+                    "color": C_BLUE,
+                }),
+            ], style={
+                "background": rgba(C_BLUE, 0.08),
+                "border": f"1px solid {rgba(C_BLUE, 0.22)}",
+                "borderRadius": "7px",
+                "padding": "5px 10px",
+                "flex": "1", "textAlign": "center",
+            }),
+            html.Div([
+                html.Span("♀ FEMALE", style={
+                    "fontFamily": "'DM Mono',monospace",
+                    "fontSize": "8px", "fontWeight": "700",
+                    "color": C_PURPLE, "letterSpacing": "0.6px",
+                    "display": "block", "marginBottom": "1px",
+                }),
+                html.Span(h_female_fmt, style={
+                    "fontFamily": "'DM Mono',monospace",
+                    "fontSize": "16px", "fontWeight": "700",
+                    "color": C_PURPLE,
+                }),
+            ], style={
+                "background": rgba(C_PURPLE, 0.08),
+                "border": f"1px solid {rgba(C_PURPLE, 0.22)}",
+                "borderRadius": "7px",
+                "padding": "5px 10px",
+                "flex": "1", "textAlign": "center",
+            }),
+        ], style={"display": "flex", "gap": "8px"}),
+        html.P("Bettahalasuru Village, Karnataka", style={
+            "fontSize": "10px", "color": MUTED, "margin": "7px 0 0",
+        }),
+    ], style={
+        **CARD_STYLE,
+        "padding": "14px 18px 18px",
+        "boxShadow": f"0 4px 24px {rgba(C_BLUE, 0.10)}",
+        "flex": "1", "minWidth": "0",
+    })
+
+    # ════════════════════════════════════════════════════════════════════
+    # CARD 2 — PHC SERVICES  (no tag pills, top-aligned)
+    # ════════════════════════════════════════════════════════════════════
+    phc_services_card = html.Div([
+        card_top_bar(C_GREEN),
+        html.P("PHC SERVICES", style={
+            "fontFamily": "'DM Mono',monospace",
+            "fontSize": "10px", "fontWeight": "700",
+            "color": MUTED, "letterSpacing": "1.2px",
+            "textTransform": "uppercase",
+            "margin": "10px 0 4px",
+        }),
+        html.Div(str(h_phc_services), style={
+            "fontSize": "38px", "fontWeight": "800",
+            "color": C_GREEN, "lineHeight": "1",
+            "fontFamily": "'DM Mono',monospace",
+            "letterSpacing": "-1.5px",
+            "marginBottom": "8px",
+        }),
+        html.P("Screening programs active", style={
+            "fontSize": "12px", "color": MUTED, "margin": "0",
+        }),
+    ], style={
+        **CARD_STYLE,
+        "padding": "14px 18px 18px",
+        "boxShadow": f"0 4px 24px {rgba(C_GREEN, 0.08)}",
+        "flex": "1", "minWidth": "0",
+    })
+
+    # ════════════════════════════════════════════════════════════════════
+    # CARD 3 — VECTOR CLUSTER  (flex:2, same row)
+    # ════════════════════════════════════════════════════════════════════
+    vector_cluster_card = html.Div([
+        # Header
         html.Div([
             html.Div(style={
-                "width": "3px", "height": "18px", "background": C_BLUE,
-                "borderRadius": "2px", "marginRight": "10px",
+                "width": "3px", "height": "13px",
+                "background": C_BLUE, "borderRadius": "2px",
+                "marginRight": "8px", "flexShrink": "0",
             }),
             html.P(
                 "Vector-Borne Disease — Rainfall Correlation & Key Findings",
                 style={
-                    "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
-                    "fontWeight": "700", "color": MUTED,
-                    "letterSpacing": "1.2px", "textTransform": "uppercase", "margin": "0",
+                    "fontFamily": "'DM Mono',monospace",
+                    "fontSize": "9px", "fontWeight": "700",
+                    "color": MUTED, "letterSpacing": "1px",
+                    "textTransform": "uppercase", "margin": "0",
                 }
             ),
-        ], style={"display": "flex", "alignItems": "center", "marginBottom": "18px"}),
+        ], style={
+            "display": "flex", "alignItems": "center",
+            "padding": "12px 16px 10px",
+        }),
+        # Separator
+        html.Div(style={"height": "1px", "background": BORDER}),
+        # 4 KPI blocks
         html.Div(
             vector_mini_cards,
-            style={"display": "flex", "gap": "20px", "alignItems": "flex-start"},
+            style={"display": "flex", "alignItems": "flex-start"},
         ),
     ], style={
         **CARD_STYLE,
-        "padding": "20px 24px 22px",
-        "marginBottom": "28px",
+        "padding": "0",
         "boxShadow": "0 2px 16px rgba(0,0,0,0.05)",
+        "overflow": "hidden",
+        "flex": "2",        # wider — matches reference layout
+        "minWidth": "0",
     })
 
+    # ════════════════════════════════════════════════════════════════════
+    # UNIFIED TOP ROW  [ Pop (1) | PHC (1) | Vector (2) ]
+    # ════════════════════════════════════════════════════════════════════
+    top_kpi_row = html.Div(
+        [population_card, phc_services_card, vector_cluster_card],
+        style={
+            "display": "flex",
+            "gap": "20px",
+            "marginBottom": "28px",
+            "alignItems": "stretch",
+        },
+    )
+
+    # ════════════════════════════════════════════════════════════════════
+    # CHARTS ROW
+    # ════════════════════════════════════════════════════════════════════
     charts_row = grid2([
         chart_card(
-            html.Div([
-                dcc.Graph(
-                    figure=fig_dis,
-                    config={"displayModeBar": False},
-                    style={"height": "360px"},
-                ),
-            ]),
+            html.Div([dcc.Graph(figure=fig_dis, config={"displayModeBar": False},
+                                style={"height": "360px"})]),
             "blue",
         ),
         chart_card(
-            html.Div([
-                dcc.Graph(
-                    figure=fig_vec,
-                    config={"displayModeBar": False},
-                    style={"height": "360px"},
-                ),
-            ]),
+            html.Div([dcc.Graph(figure=fig_vec, config={"displayModeBar": False},
+                                style={"height": "360px"})]),
             "green",
         ),
     ])
 
+    # ════════════════════════════════════════════════════════════════════
+    # DISEASE BURDEN + SCREENING
+    # ════════════════════════════════════════════════════════════════════
     burden_screening = grid2([
         html.Div([
             card_top_bar(C_BLUE),
@@ -2622,7 +2622,6 @@ def page_human(d):
             progress_bar("Dengue",                    db_den_sub,  db_den_pct,  "red"),
             progress_bar("Leptospirosis",             db_lep_sub,  db_lep_pct,  "green"),
         ], style=CARD_STYLE),
-
         html.Div([
             card_top_bar(C_PURPLE),
             html.Div(style={"height": "6px"}),
@@ -2633,7 +2632,7 @@ def page_human(d):
                     [("Blood Pressure Monitoring", 2), ("Weekly",       1), (badge("Active",   "good"), 1)],
                     [("Blood Sugar Testing",        2), ("Weekly",       1), (badge("Active",   "good"), 1)],
                     [("Antenatal Care",             2), ("Weekly",       1), (badge("Active",   "good"), 1)],
-                    [("TB Sputum / Chest X-Ray",   2), ("Symptomatic",  1), (badge("Active",   "good"), 1)],
+                    [("TB Sputum / Chest X-Ray",    2), ("Symptomatic",  1), (badge("Active",   "good"), 1)],
                     [("Malaria & Dengue RDT",       2), ("Peak seasons", 1), (badge("Seasonal", "warn"), 1)],
                     [("HIV Testing",                2), ("On request",   1), (badge("Active",   "good"), 1)],
                     [("Eye & Vision Screening",     2), ("Health camps", 1), (badge("Periodic", "info"), 1)],
@@ -2643,18 +2642,14 @@ def page_human(d):
         ], style=CARD_STYLE),
     ])
 
-    insights = html.Div(disease_insight_rows) if disease_insight_rows else html.Div([
-        insight_row(
-            f"{r.get('disease','')}: {r.get('casesRange','')} cases — {r.get('insight','')}",
-            [C_BLUE, C_RED, C_AMBER][i % 3],
-        )
-        for i, (_, r) in enumerate(vi.iterrows())
-    ] if not vi.empty else [])
+    # ════════════════════════════════════════════════════════════════════
+    # INSIGHTS  (empty div if no real rows — prevents ghost "cases" rows)
+    # ════════════════════════════════════════════════════════════════════
+    insights = html.Div(disease_insight_rows) if disease_insight_rows else html.Div([])
 
     return html.Div([
         header,
         top_kpi_row,
-        vector_cluster,
         charts_row,
         burden_screening,
         insights,
