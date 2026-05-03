@@ -1530,19 +1530,7 @@ def _build_surveillance_radar(d):
     )
 
 #####HEAD
-    if critical:
-        fig.add_annotation(
-            text=f"⚠ Critical categories below 40-point target detected",
-            xref="paper", yref="paper",
-            x=0.2, y=0.55,
-            xanchor="left",
-            showarrow=False,
-            font=dict(size=10, color=C_RED, family="'Sora',sans-serif"),
-            bgcolor="rgba(254,226,226,0.8)",
-            bordercolor=C_RED,
-            borderwidth=1,
-            borderpad=4,
-        )
+
 
     return fig, critical_msg
 
