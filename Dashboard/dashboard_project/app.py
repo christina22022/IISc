@@ -678,7 +678,7 @@ def ask_ollama(user_question):
     prompt = build_prompt(user_question)
     try:
         response = requests.post(
-            "http://172.25.32.117:11434/api/generate",
+            "http://10.251.15.225:11434/api/generate",
             json={
                 "model": "llama3.2",
                 "prompt": prompt,
