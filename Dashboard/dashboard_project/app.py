@@ -1529,19 +1529,7 @@ def _build_surveillance_radar(d):
         ],
     )
 
-    if critical:
-        fig.add_annotation(
-            text=f"⚠ Critical categories below 40-point target detected",
-            xref="paper", yref="paper",
-            x=0.02, y=1.13,
-            xanchor="left",
-            showarrow=False,
-            font=dict(size=10, color=C_RED, family="'Sora',sans-serif"),
-            bgcolor="rgba(254,226,226,0.8)",
-            bordercolor=C_RED,
-            borderwidth=1,
-            borderpad=4,
-        )
+
 
     return fig, critical_msg
 
@@ -1680,6 +1668,368 @@ def page_overview(d):
     fig_risk, critical_msg = _build_surveillance_radar(d)
     risk_indicators_html = _build_risk_indicators(d)
 
+    # ── Dynamic critical/good categories from actual data ────────────────────
+    oh_sum = d.get("onehealth_summary", pd.DataFrame())
+    cat_col   = find_col(oh_sum, ["category"])
+    score_col = find_col(oh_sum, ["score"])
+
+    EXPECTED_CATEGORIES = [
+        "Water Quality", "Air Quality", "Soil Health",
+        "Animal Health", "Human NCD", "Vector Disease", "AMR Risk",
+    ]
+
+    current_scores = {}
+    if cat_col and score_col and not oh_sum.empty:
+        oh_num = coerce_numeric(oh_sum, [score_col])
+        for _, row in oh_num.iterrows():
+            cat = str(row[cat_col]).strip()
+            val = row[score_col]
+            if pd.notna(val):
+                current_scores[cat] = float(val)
+
+    # Fallback to defaults if no data
+    if not current_scores:
+        current_scores = {
+            "Water Quality": 28, "Air Quality": 40, "Soil Health": 35,
+            "Animal Health": 62, "Human NCD": 55, "Vector Disease": 52, "AMR Risk": 20,
+        }
+
+    critical_cats = [(c, int(v)) for c, v in current_scores.items() if v < 40]
+    good_cats     = [(c, int(v)) for c, v in current_scores.items() if v >= 40]
+
+    # Sort: critical by score asc, good by score desc
+    critical_cats.sort(key=lambda x: x[1])
+    good_cats.sort(key=lambda x: x[1], reverse=True)
+
+    # Build dynamic banner children
+    banner_children = []
+    if critical_cats:
+        banner_children.append(html.Span("⚠ ", style={"color": C_RED}))
+        for i, (cat, val) in enumerate(critical_cats):
+            banner_children.append(
+                html.Strong(f"{cat} ({val})", style={"color": C_RED})
+            )
+            if i < len(critical_cats) - 1:
+                banner_children.append(" , ")
+        banner_children.append(
+            f" {'are' if len(critical_cats) > 1 else 'is'} critical — far below the 80-point target."
+        )
+        if good_cats:
+            best = good_cats[0]
+            banner_children.append(" ")
+            banner_children.append(
+                html.Strong(f"{best[0]} ({best[1]})", style={"color": C_GREEN})
+            )
+            banner_children.append(" is nearest to target.")
+
+    show_banner = len(banner_children) > 0
+
+    # ── AQI value for the color bar ──────────────────────────────────────────
+    try:
+        aqi_num = int(float(str(kpis["aqi"]).replace("—", "135").strip()))
+    except Exception:
+        aqi_num = 135
+
+    aqi_bands = [
+        ("Good",        "#69f0ae",  50,  "#15803d"),
+        ("Moderate",    "#ffca28", 100,  "#92400e"),
+        ("Unhlthy Sns", "#ff9800", 150,  "#c2410c"),
+        ("Unhealthy",   "#ff7043", 200,  "#b91c1c"),
+        ("Very Bad",    "#ab47bc", 300,  "#6b21a8"),
+    ]
+    aqi_band_els = []
+    for band_label, band_color, band_max, band_text_color in aqi_bands:
+        is_active = (
+            (band_max == 50  and aqi_num <= 50) or
+            (band_max == 100 and 51 <= aqi_num <= 100) or
+            (band_max == 150 and 101 <= aqi_num <= 150) or
+            (band_max == 200 and 151 <= aqi_num <= 200) or
+            (band_max == 300 and aqi_num > 200)
+        )
+        aqi_band_els.append(
+            html.Div(style={
+                "flex": "1",
+                "height": "10px",
+                "background": band_color,
+                "borderRadius": "4px",
+                "boxShadow": f"0 0 0 2px {band_color}, 0 0 0 3px #fff" if is_active else "none",
+            })
+        )
+
+    aqi_label_els = []
+    for band_label, band_color, band_max, band_text_color in aqi_bands:
+        is_active = (
+            (band_max == 50  and aqi_num <= 50) or
+            (band_max == 100 and 51 <= aqi_num <= 100) or
+            (band_max == 150 and 101 <= aqi_num <= 150) or
+            (band_max == 200 and 151 <= aqi_num <= 200) or
+            (band_max == 300 and aqi_num > 200)
+        )
+        aqi_label_els.append(
+            html.Span(
+                f"▲ {aqi_num}" if is_active else band_label,
+                style={
+                    "color": band_text_color,
+                    "fontWeight": "700" if is_active else "400",
+                    "fontSize": "9px",
+                    "fontFamily": "'DM Mono',monospace",
+                }
+            )
+        )
+
+    # ── ROW 1: 5-column KPI grid ─────────────────────────────────────────────
+    row1 = html.Div([
+
+        html.Div([
+            card_top_bar(C_BLUE),
+            html.P("HOUSEHOLDS", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div(str(kpis["households"]), style={
+                "fontSize": "28px", "fontWeight": "700", "color": TEXT,
+                "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
+            }),
+        ], style=CARD_STYLE),
+
+        html.Div([
+            card_top_bar(C_GREEN),
+            html.P("LIVESTOCK", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div(str(kpis["livestock"]), style={
+                "fontSize": "28px", "fontWeight": "700", "color": C_GREEN,
+                "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
+            }),
+        ], style=CARD_STYLE),
+
+        html.Div([
+            card_top_bar(C_AMBER),
+            html.P("STRAY DOGS", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div(str(kpis["stray_dogs"]), style={
+                "fontSize": "28px", "fontWeight": "700", "color": C_AMBER,
+                "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
+            }),
+        ], style=CARD_STYLE),
+
+        html.Div([
+            card_top_bar(C_AMBER),
+            html.P("AVIAN SPECIES", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div(str(kpis["avian"]), style={
+                "fontSize": "28px", "fontWeight": "700", "color": C_AMBER,
+                "lineHeight": "1", "fontFamily": "'DM Mono',monospace",
+            }),
+        ], style=CARD_STYLE),
+
+        html.Div([
+            card_top_bar(C_PURPLE),
+            html.P("AIR QUALITY INDEX", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div([
+                html.Span(str(kpis["aqi"]), style={
+                    "fontSize": "36px", "fontWeight": "700", "color": C_AMBER,
+                    "fontFamily": "'DM Mono',monospace", "lineHeight": "1",
+                }),
+                html.Span(" AQI", style={"fontSize": "13px", "color": MUTED, "marginLeft": "4px"}),
+            ]),
+            html.Div(
+                aqi_band_els,
+                style={
+                    "display": "flex", "gap": "2px",
+                    "height": "10px", "borderRadius": "6px",
+                    "overflow": "visible", "marginTop": "10px",
+                }
+            ),
+            html.Div(
+                aqi_label_els,
+                style={
+                    "display": "flex", "justifyContent": "space-between",
+                    "marginTop": "4px",
+                }
+            ),
+        ], style=CARD_STYLE),
+
+    ], style={
+        "display": "grid",
+        "gridTemplateColumns": "repeat(5, 1fr)",
+        "gap": "12px",
+        "marginBottom": "16px",
+    })
+
+    # ── ROW 2: 3-column KPI grid ─────────────────────────────────────────────
+    row2 = html.Div([
+
+        html.Div([
+            card_top_bar(C_BLUE),
+            html.P("AMBIENT HUMIDITY", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div([
+                html.Span(str(kpis["humidity"]), style={
+                    "fontSize": "42px", "fontWeight": "800", "color": C_BLUE,
+                    "fontFamily": "'DM Mono',monospace", "lineHeight": "1",
+                }),
+                html.Span(" %", style={"fontSize": "16px", "color": MUTED, "marginLeft": "4px"}),
+            ]),
+        ], style=CARD_STYLE),
+
+        html.Div([
+            card_top_bar(C_GREEN),
+            html.P("ABC PROGRAMME", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div(str(kpis["abc_count"]), style={
+                "fontSize": "42px", "fontWeight": "800", "color": C_GREEN,
+                "fontFamily": "'DM Mono',monospace", "lineHeight": "1",
+            }),
+        ], style=CARD_STYLE),
+
+        html.Div([
+            card_top_bar(C_RED),
+            html.P("WATER SOURCES TESTED", style={
+                "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
+                "fontWeight": "700", "color": MUTED, "letterSpacing": "1px",
+                "textTransform": "uppercase", "margin": "8px 0 4px",
+            }),
+            html.Div(str(kpis["water_sources"]), style={
+                "fontSize": "42px", "fontWeight": "800", "color": C_RED,
+                "fontFamily": "'DM Mono',monospace", "lineHeight": "1",
+            }),
+        ], style=CARD_STYLE),
+
+    ], style={
+        "display": "grid",
+        "gridTemplateColumns": "repeat(3, 1fr)",
+        "gap": "16px",
+        "marginBottom": "20px",
+    })
+
+    # ── ROW 3: Radar chart (left) + Risk progress bars (right) ───────────────
+    row3 = html.Div([
+
+        html.Div([
+            card_top_bar(C_BLUE),
+            html.Div(style={"height": "6px"}),
+
+            # Legend row
+            html.Div([
+                html.Span([
+                    html.Span(style={
+                        "display": "inline-block", "width": "18px", "height": "3px",
+                        "background": C_BLUE, "borderRadius": "2px",
+                        "marginRight": "5px", "verticalAlign": "middle",
+                    }),
+                    html.Span("Current Status", style={
+                        "fontSize": "11px", "fontWeight": "700", "color": TEXT,
+                    }),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Span([
+                    html.Span(style={
+                        "display": "inline-block", "width": "18px", "height": "0",
+                        "borderTop": f"2.5px dashed {C_GREEN}",
+                        "marginRight": "5px", "verticalAlign": "middle",
+                    }),
+                    html.Span("Target (80/100)", style={
+                        "fontSize": "11px", "fontWeight": "700", "color": TEXT,
+                    }),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Span([
+                    html.Span(style={
+                        "display": "inline-block", "width": "14px", "height": "10px",
+                        "background": rgba(C_BLUE, 0.15),
+                        "border": f"1.5px solid {C_BLUE}", "borderRadius": "2px",
+                        "marginRight": "5px", "verticalAlign": "middle",
+                    }),
+                    html.Span("Gap to Target", style={
+                        "fontSize": "11px", "fontWeight": "700", "color": TEXT,
+                    }),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Span([
+                    html.Span(style={
+                        "display": "inline-block", "width": "10px", "height": "10px",
+                        "background": rgba(C_RED, 0.2),
+                        "borderRadius": "50%", "marginRight": "5px", "verticalAlign": "middle",
+                    }),
+                    html.Span("Critical (<40)", style={
+                        "fontSize": "11px", "fontWeight": "700", "color": C_RED,
+                    }),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+            ], style={
+                "display": "flex", "alignItems": "center", "flexWrap": "wrap",
+                "gap": "16px", "marginBottom": "8px",
+            }),
+
+            # Dynamic critical annotation banner — only shown if there are critical categories
+            html.Div(
+                banner_children,
+                style={
+                    "fontSize": "10px", "color": MUTED,
+                    "fontFamily": "'DM Mono',monospace",
+                    "padding": "5px 8px",
+                    "background": rgba(C_RED, 0.06),
+                    "borderRadius": "6px",
+                    "borderLeft": f"3px solid {C_RED}",
+                    "marginBottom": "6px",
+                    "lineHeight": "1.6",
+                    "display": "block" if show_banner else "none",
+                }
+            ),
+
+            # Radar chart
+            html.Div([
+                dcc.Graph(
+                    figure=fig_risk,
+                    config={"displayModeBar": False},
+                    style={"height": "320px"},
+                ),
+            ], style={
+                "display": "flex", "alignItems": "center",
+                "justifyContent": "center", "position": "relative",
+            }),
+
+        ], style=CARD_STYLE),
+
+        # RIGHT: Risk progress bars
+        html.Div([
+            card_top_bar(C_AMBER),
+            html.Div(style={"height": "6px"}),
+            card_title("Key Risk Indicators at a Glance"),
+
+            progress_bar("Water Contamination Risk",        "High — 8/10 samples exceed WHO TDS limits",   80, "red"),
+            progress_bar("Vector-borne Disease Pressure",   "Moderate — seasonal spikes",                  58, "amber"),
+            progress_bar("AMR Antibiotic Residue Risk",     "Low — within safe limits",                    22, "green"),
+            progress_bar("Stray Dog Rabies Risk",           "Moderate — 13% infected in neutered pop.",    50, "red"),
+            progress_bar("Air Quality Index",               "135 AQI — Unhealthy for sensitive groups",    67, "amber"),
+            progress_bar("Soil Microbial Load",             "Very High — horse stable soil TNTC",          85, "red"),
+            progress_bar("E. coli / Enterobacter Presence", "Detected in lake & soil samples",             72, "red"),
+
+        ], style=CARD_STYLE),
+
+    ], style={
+        "display": "grid",
+        "gridTemplateColumns": "1fr 1fr",
+        "gap": "20px",
+        "marginBottom": "24px",
+    })
+
     return html.Div([
         hero_box(
             "One Health Dashboard",
@@ -1687,49 +2037,9 @@ def page_overview(d):
             "environment at the village interface — built on the One Health framework by Planetary Health "
             "Foundation, an initiative of Equine Biotech, IISc.",
         ),
-
-        html.Div([
-            kpi_card("Households",        kpis["households"],    "",          "Bettahalasuru, Karnataka",   "blue"),
-            kpi_card("Livestock",         kpis["livestock"],     "animals",   "Via Vet Department",         "green"),
-            kpi_card("Stray Dogs",        kpis["stray_dogs"],    "",          "Village population",         "amber"),
-            kpi_card("ABC Programme",     kpis["abc_count"],     "animals",   "Neutered + anti-rabies",     "red"),
-            kpi_card("Avian Species",     kpis["avian"],         "species",   "Observed in area",           "purple"),
-            kpi_card("AQI",               kpis["aqi"],           "",          "Live — Bangalore air quality","amber"),
-            kpi_card("Humidity",          kpis["humidity"],      "%",         "Live — Bangalore weather",   "blue"),
-            kpi_card("Water Sources",     kpis["water_sources"], "tested",    "Village + lake combined",    "red"),
-        ], style={"display": "grid", "gridTemplateColumns": "repeat(8,1fr)", "gap": "12px", "marginBottom": "20px"}),
-
-        html.Div([
-            html.Div([
-                dcc.Graph(
-                    figure=fig_risk,
-                    config={"displayModeBar": False},
-                    style={"height": "420px"},
-                ),
-            ], style={
-                "background": "#f8fafc",
-                "border": f"1px solid {BORDER}",
-                "borderRadius": "12px",
-                "overflow": "hidden",
-                "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
-            }),
-
-            html.Div([
-                risk_indicators_html,
-            ], style={
-                "background": "#fffbeb",
-                "border": f"1px solid {BORDER}",
-                "borderRadius": "12px",
-                "padding": "20px 24px",
-                "overflow": "hidden",
-                "boxShadow": "0 2px 8px rgba(0,0,0,0.06)",
-            }),
-        ], style={
-            "display": "grid",
-            "gridTemplateColumns": "1fr 1fr",
-            "gap": "20px",
-            "marginBottom": "24px",
-        }),
+        row1,
+        row2,
+        row3,
     ])
 
 
