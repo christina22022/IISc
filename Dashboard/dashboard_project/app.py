@@ -1529,9 +1529,7 @@ def _build_surveillance_radar(d):
         ],
     )
 
-<<<<<<< HEAD
-
-=======
+#####HEAD
     if critical:
         fig.add_annotation(
             text=f"⚠ Critical categories below 40-point target detected",
@@ -1545,7 +1543,6 @@ def _build_surveillance_radar(d):
             borderwidth=1,
             borderpad=4,
         )
->>>>>>> d587d12 (enviupdate)
 
     return fig, critical_msg
 
