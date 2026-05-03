@@ -1486,7 +1486,7 @@ def _build_surveillance_radar(d):
         paper_bgcolor="#f8fafc",
         plot_bgcolor="#f8fafc",
         font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
-        margin=dict(l=40, r=40, t=70, b=40),
+        margin=dict(l=20, r=20, t=60, b=80),
         title=dict(
             text="One Health Surveillance Summary",
             font=dict(size=14, color=TEXT, family="'Sora',sans-serif"),
@@ -1533,7 +1533,7 @@ def _build_surveillance_radar(d):
         fig.add_annotation(
             text=f"⚠ Critical categories below 40-point target detected",
             xref="paper", yref="paper",
-            x=0.02, y=1.13,
+            x=0.2, y=0.55,
             xanchor="left",
             showarrow=False,
             font=dict(size=10, color=C_RED, family="'Sora',sans-serif"),
@@ -3076,16 +3076,16 @@ def _build_calib_content(drug_filter):
     return charts_div, metrics_div
 
 
+##################################################################
 def page_environment(d):
-    wq  = d.get("water_quality",       pd.DataFrame())
-    vc  = d.get("villagewatercfu",     pd.DataFrame())
-    lc  = d.get("lake_water_cfu",      pd.DataFrame())
-    gsd = d.get("gram_staining_data",  pd.DataFrame())
-    mc  = d.get("microbial_analysis",  pd.DataFrame())
-    sc  = d.get("soil_cfu",            pd.DataFrame())
-    pv  = d.get("physiochem_village_waterquality", pd.DataFrame())
+    wq       = d.get("water_quality",         pd.DataFrame())
+    lc_raw   = d.get("lake_full_integration", pd.DataFrame())
+    gsd      = d.get("gram_staining_data",    pd.DataFrame())
+    mc       = d.get("microbial_analysis",    pd.DataFrame())
+    soil_df  = d.get("soil_data",             pd.DataFrame())
+    pv       = d.get("physiochem_village_waterquality", pd.DataFrame())
 
-    gs = parse_gram_staining(d)
+    gs             = parse_gram_staining(d)
     total_isolates = gs["total_isolates"]
     gram_neg_pct   = gs["gram_neg_pct"]
     gram_neg_count = gs["gram_neg_count"]
@@ -3093,21 +3093,18 @@ def page_environment(d):
     cocci_pct      = gs["cocci_pct"]
     mucoid_pct     = gs["mucoid_pct"]
 
-    # ── AQI and humidity from LIVE scrape (with sheet fallback) ──────────────
     live_aqi_str, live_hum_str = get_live_aqi_humidity(d)
-
-    try:
-        aqi_val = float(live_aqi_str) if live_aqi_str not in (None, "—") else 135
-    except (TypeError, ValueError):
-        aqi_val = 135
-
+    aqi_display  = live_aqi_str if live_aqi_str not in (None, "—") else "—"
     humidity_val = live_hum_str if live_hum_str not in (None, "—") else "—"
+    try:
+        aqi_val = float(aqi_display)
+    except (TypeError, ValueError):
+        aqi_val = 0
 
-    effluent_tds = "—"
+    effluent_tds    = "—"
     wq_source_col_e = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
     wq_tds_col_e    = find_col(wq, ["TDS_ppm", "TDS", "tds"])
     wq_id_col_kpi   = find_col(wq, ["sampleId", "sample_id", "id", "sample_no", "Sample no.", "Sample no"])
-
     if not wq.empty and wq_tds_col_e:
         if wq_id_col_kpi:
             s1_mask = wq[wq_id_col_kpi].astype(str).str.strip().str.lower().isin(["s1", "1", "sample 1", "sample1"])
@@ -3126,222 +3123,168 @@ def page_environment(d):
             if pd.notna(tds_raw):
                 effluent_tds = f"{int(tds_raw):,}"
 
-    wq_tds_col       = find_col(wq, ["TDS_ppm", "TDS"])
-    wq_do_col        = find_col(wq, ["DO_mg_L", "DO"])
+    wq_tds_col       = find_col(wq, ["TDS_ppm", "TDS", "tds"])
+    wq_do_col        = find_col(wq, ["DO_mg_L", "DO", "do"])
     wq_status_col    = find_col(wq, ["drinking_status", "drinkingStatus"])
     wq_turbidity_col = find_col(wq, ["turbidity_NTU", "turbidity"])
     wq_source_col    = find_col(wq, ["source_name", "sourceName", "source", "location"])
-    fig_wq = empty_fig("No water quality data available")
-    if all([wq_tds_col, wq_do_col, wq_status_col, wq_turbidity_col, wq_source_col]):
-        wq_plot = coerce_numeric(wq, [wq_tds_col, wq_do_col, wq_turbidity_col])
-        wq_plot = wq_plot.dropna(subset=[wq_tds_col, wq_do_col, wq_turbidity_col, wq_status_col, wq_source_col]).copy()
-        color_map = {"Unfit": C_RED, "Treat First": C_AMBER, "Borderline": C_PURPLE, "Agriculture": C_GREEN}
-        if not wq_plot.empty:
-            fig_wq = px.scatter(
-                wq_plot, x=wq_tds_col, y=wq_do_col, color=wq_status_col,
-                color_discrete_map=color_map, size=wq_turbidity_col, size_max=35,
-                hover_name=wq_source_col,
-                title="Water Potability — TDS vs Dissolved Oxygen",
-                labels={wq_tds_col: "TDS (ppm)", wq_do_col: "DO (mg/L)", wq_status_col: "Drinking Status"},
-                hover_data=[c for c in [find_col(wq_plot, ["pH"]), find_col(wq_plot, ["EC_mS", "EC_uS"]), wq_turbidity_col] if c],
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # CHART 1 (LEFT) — Water Quality: TDS bar chart
+    # ═════════════════════════════════════════════════════════════════════════
+    def tds_color(v):
+        if v > 1000:  return "#E8594A"
+        elif v > 500: return "#F4845F"
+        elif v > 400: return "#F5C842"
+        elif v > 250: return "#52B788"
+        else:         return "#74B3CE"
+
+    fig_tds_bar = empty_fig("No water quality data available")
+    if wq_source_col and wq_tds_col and not wq.empty:
+        tds_plot = coerce_numeric(wq, [wq_tds_col]).copy()
+        tds_plot = tds_plot.dropna(subset=[wq_source_col, wq_tds_col])
+        if not tds_plot.empty:
+            n_samples   = len(tds_plot)
+            tds_values  = tds_plot[wq_tds_col].tolist()
+            color_array = [tds_color(v) for v in tds_values]
+
+            fig_tds_bar = go.Figure()
+            fig_tds_bar.add_trace(go.Bar(
+                x=tds_plot[wq_source_col].astype(str).tolist(),
+                y=tds_values,
+                name="TDS (ppm)",
+                marker=dict(
+                    color=color_array,
+                    line=dict(width=0),
+                    opacity=0.92,
+                    cornerradius=6,
+                ),
+                hovertemplate="<b>%{x}</b><br>TDS: %{y} ppm<extra></extra>",
+            ))
+            fig_tds_bar.add_trace(go.Scatter(
+                x=[None], y=[None], mode="lines",
+                line=dict(color="#F59E0B", width=2.2, dash="dot"),
+                name="WHO Limit (500 ppm)",
+            ))
+            fig_tds_bar.add_hline(
+                y=500,
+                line_dash="dot",
+                line_color="#F59E0B",
+                line_width=2.2,
             )
-            fig_wq.add_vline(x=500, line_dash="dot", line_color=C_BLUE, line_width=1.5,
-                             annotation_text="TDS safe ≤500 ppm", annotation_font=dict(color=C_BLUE, size=10))
-            fig_wq.add_hline(y=6, line_dash="dot", line_color=C_GREEN, line_width=1.5,
-                             annotation_text="DO safe ≥6 mg/L", annotation_font=dict(color=C_GREEN, size=10))
-    fig_wq.update_layout(**PL("Water Potability — TDS vs Dissolved Oxygen (bubble size = turbidity)"))
-
-    wq_ph_col_r  = find_col(wq, ["pH", "ph"])
-    wq_ec_col_r  = find_col(wq, ["EC_mS", "EC_uS", "EC", "ec"])
-    wq_ntu_col_r = find_col(wq, ["turbidity_NTU", "turbidity", "NTU"])
-    fig_physchem = empty_fig("No physicochemical data available")
-
-    if wq_source_col and wq_ph_col_r and wq_ec_col_r and wq_ntu_col_r and not wq.empty:
-        pc_plot = coerce_numeric(wq, [wq_ph_col_r, wq_ec_col_r, wq_ntu_col_r])
-        pc_plot = pc_plot.dropna(subset=[wq_source_col, wq_ph_col_r, wq_ec_col_r]).copy()
-
-        if not pc_plot.empty:
-            def norm_col(col):
-                mn, mx = pc_plot[col].min(), pc_plot[col].max()
-                if mx == mn:
-                    return pd.Series([50.0] * len(pc_plot), index=pc_plot.index)
-                return ((pc_plot[col] - mn) / (mx - mn) * 100).round(1)
-
-            pc_plot["pH_norm"]  = norm_col(wq_ph_col_r)
-            pc_plot["EC_norm"]  = norm_col(wq_ec_col_r)
-            pc_plot["NTU_norm"] = norm_col(wq_ntu_col_r) if wq_ntu_col_r else 0
-
-            params = ["pH (normalised)", "EC (normalised)", "Turbidity (normalised)"]
-            norm_cols = ["pH_norm", "EC_norm", "NTU_norm"]
-            colors_p = [C_BLUE, C_PURPLE, C_AMBER]
-
-            fig_physchem = go.Figure()
-            for norm_c, param, col_c in zip(norm_cols, params, colors_p):
-                if norm_c in pc_plot.columns:
-                    fig_physchem.add_trace(go.Bar(
-                        name=param,
-                        x=pc_plot[wq_source_col].astype(str),
-                        y=pc_plot[norm_c],
-                        marker_color=col_c,
-                        marker_line_width=0,
-                        hovertemplate=f"<b>%{{x}}</b><br>{param}: %{{y:.1f}}<extra></extra>",
-                    ))
-
-            fig_physchem.add_hline(
-                y=50,
-                line_dash="dot", line_color=C_GREEN, line_width=1.5,
-                annotation_text="Mid-range reference",
-                annotation_font=dict(color=C_GREEN, size=9),
-            )
-
-    fig_physchem.update_layout(**PL(
-        "Physicochemical Profile — pH, EC & Turbidity by Source (normalised 0–100)",
-        barmode="group",
-        yaxis_title="Normalised Score (0–100)",
-        xaxis_title="Water Source",
-    ))
-    fig_physchem.update_xaxes(tickangle=-20)
-
-    vc_source_col = find_col(vc, ["source", "source_name", "sourceName", "sample", "location"])
-    vc_mean_col   = find_col(vc, ["mean_cfu", "CFU_avg", "CFU avg"])
-    fig_vc = empty_fig("No village water CFU data available")
-    if vc_source_col and vc_mean_col:
-        vc_s = coerce_numeric(vc, [vc_mean_col]).dropna(subset=[vc_source_col, vc_mean_col]).sort_values(vc_mean_col)
-        n = len(vc_s)
-        if n:
-            bclr = [C_GREEN if i < max(1, n // 2) else C_BLUE for i in range(n)]
-            fig_vc = go.Figure()
-            fig_vc.add_trace(go.Bar(
-                x=vc_s[vc_mean_col], y=vc_s[vc_source_col], orientation="h",
-                marker_color=bclr, marker_line_width=0,
-                hovertemplate="<b>%{y}</b><br>%{x:.3f} CFU/mL<extra></extra>",
-            ))
-    fig_vc.update_layout(**PL("Village Water Sources — Mean Bacterial CFU/mL", xaxis_title="CFU/mL"))
-
-    lc_sample_col = find_col(lc, ["sample", "location", "source"])
-    lc_mean_col   = find_col(lc, ["mean_cfu", "CFU_avg", "CFU avg"])
-    fig_lc = empty_fig("No lake water CFU data available")
-    if lc_sample_col and lc_mean_col:
-        lc_s = coerce_numeric(lc, [lc_mean_col]).dropna(subset=[lc_sample_col, lc_mean_col]).sort_values(lc_mean_col, ascending=False)
-        n = len(lc_s)
-        if n:
-            bclr = [C_RED if i < max(1, n // 3) else (C_AMBER if i < max(2, 2 * n // 3) else C_BLUE) for i in range(n)]
-            fig_lc = go.Figure()
-            fig_lc.add_trace(go.Bar(
-                x=lc_s[lc_sample_col], y=lc_s[lc_mean_col],
-                marker_color=bclr, marker_line_width=0,
-                hovertemplate="<b>%{x}</b><br>%{y:.3f} CFU/mL<extra></extra>",
-            ))
-    fig_lc.update_layout(**PL("Lake Entry Points — Mean Bacterial CFU/mL", yaxis_title="CFU/mL"))
-    fig_lc.update_xaxes(tickangle=-25)
-
-    soil_data_df = d.get("soil_data", pd.DataFrame())
-    fig_soil = empty_fig("No soil data available")
-
-    if not soil_data_df.empty:
-        site_col   = find_col(soil_data_df, ["site", "name", "location", "site_name"])
-        na2_col    = find_col(soil_data_df, ["na_growth_10_2"])
-        na6_col    = find_col(soil_data_df, ["colony_count_10_6"])
-        emb_col    = find_col(soil_data_df, ["e_coli_present"])
-
-        if site_col and any([na2_col, na6_col, emb_col]):
-            soil_plot = coerce_numeric(
-                soil_data_df,
-                [c for c in [na2_col, na6_col, emb_col] if c]
-            ).copy()
-            soil_plot = soil_plot.dropna(subset=[site_col])
-
-            sites = soil_plot[site_col].astype(str).tolist()
-            n = min(len(soil_plot), 3)
-            x_labels = sites[:n]
-
-            na2_vals = pd.to_numeric(soil_plot[na2_col], errors="coerce").fillna(0).values[:n]
-            na6_vals = pd.to_numeric(soil_plot[na6_col], errors="coerce").fillna(0).values[:n]
-            emb_vals = pd.to_numeric(soil_plot[emb_col], errors="coerce").fillna(0).values[:n]
-
-            fig_soil = go.Figure()
-            fig_soil.add_trace(go.Bar(
-                x=x_labels, y=na2_vals,
-                name="NA (10⁻²) — Growth",
-                marker_color="#D85A30", marker_line_width=0,
-                hovertemplate="<b>%{x}</b><br>NA (10⁻²): %{y:.1f} (×3000)<extra></extra>",
-            ))
-            fig_soil.add_trace(go.Bar(
-                x=x_labels, y=na6_vals,
-                name="NA (10⁻⁶) — Colony Count",
-                marker_color="#7BB3D4", marker_line_width=0,
-                hovertemplate="<b>%{x}</b><br>NA (10⁻⁶): %{y:.1f} (×300)<extra></extra>",
-            ))
-            fig_soil.add_trace(go.Bar(
-                x=x_labels, y=emb_vals,
-                name="EMB — E. coli Indicator",
-                marker_color="#A8D5B5", marker_line_width=0,
-                hovertemplate="<b>%{x}</b><br>EMB: %{y:.1f} (×30)<extra></extra>",
-            ))
-
-            fig_soil.update_layout(**PL(
-                "Soil Microbial Load by Site",
-                barmode="group",
-                paper_bgcolor="#ffffff",
-                plot_bgcolor="#ffffff",
-            ))
-            fig_soil.update_yaxes(
-                range=[0, 120],
-                tickvals=[0, 20, 40, 60, 80, 100, 120],
-                title_text="Scaled Count (arbitrary units)",
-                showgrid=True,
-                gridcolor="rgba(0,0,0,0.08)",
-            )
-            fig_soil.update_xaxes(title_text="Sampling Site")
-            fig_soil.update_layout(
+            fig_tds_bar.update_layout(
+                plot_bgcolor="#f5f7fa",
+                paper_bgcolor="#f5f7fa",
+                font=dict(family="Sora, sans-serif", size=12, color="#334155"),
+                title=dict(
+                    text=f"Water Quality — Physicochemical Parameters ({n_samples} Samples)",
+                    x=0.02,
+                    xanchor="left",
+                    font=dict(size=15, family="Sora, sans-serif", color="#0f172a"),
+                ),
+                yaxis_title="TDS (ppm)",
+                xaxis_title="",
+                bargap=0.38,
                 legend=dict(
-                    orientation="h", yanchor="top", y=-0.18,
-                    xanchor="center", x=0.5,
-                    font=dict(size=10),
-                    bgcolor="rgba(0,0,0,0)",
-                )
+                    orientation="h", x=0, y=-0.28,
+                    bgcolor="rgba(0,0,0,0)", font_size=11,
+                ),
+                margin=dict(l=40, r=20, t=60, b=90),
+                xaxis=dict(
+                    showgrid=False,
+                    linecolor="rgba(0,0,0,0.08)",
+                    tickangle=-30,
+                    tickfont=dict(size=10, color="#64748b"),
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor="rgba(0,0,0,0.07)",
+                    zeroline=False,
+                    linecolor="rgba(0,0,0,0)",
+                    tickfont=dict(color="#64748b"),
+                    title_font=dict(color="#64748b"),
+                ),
             )
 
-    fig_gr = go.Figure()
-    gram_pos_pct = max(0.0, 100.0 - gram_neg_pct)
-    fig_gr.add_trace(go.Pie(
-        labels=["Gram Negative", "Gram Positive"],
-        values=[gram_neg_pct, gram_pos_pct],
-        hole=0.58,
-        marker_colors=[C_RED, BORDER],
-        textfont_color=TEXT,
-        textinfo="label+percent",
-        hovertemplate="<b>%{label}</b><br>%{percent}<br>Count: %{value:.1f}%<extra></extra>",
-    ))
-    fig_gr.update_layout(**PLna(f"Gram Staining — {total_isolates} Isolates ({gram_neg_count} Gram–ve)"))
+    # ═════════════════════════════════════════════════════════════════════════
+    # CHART 1 (RIGHT) — Dissolved Oxygen vs TDS scatter  ★ UI UPDATED ★
+    # ═════════════════════════════════════════════════════════════════════════
+    color_map = {
+        "Unfit":       "#ef4444",
+        "Treat First": "#f59e0b",
+        "Borderline":  "#a855f7",
+        "Agriculture": "#22c55e",
+    }
 
-    fig_aqi = go.Figure(go.Indicator(
-        mode="gauge+number", value=float(aqi_val),
-        title={"text": "Air Quality Index (AQI) — Live Bangalore", "font": {"color": C_AMBER, "size": 13}},
-        number={"font": {"color": C_AMBER, "size": 40}},
-        gauge=dict(
-            axis=dict(range=[0, 200], tickcolor=MUTED, tickfont_color=MUTED),
-            bar=dict(color=C_AMBER, thickness=0.25),
-            bgcolor="#ffffff", bordercolor=BORDER,
-            steps=[
-                dict(range=[0,   50],  color="#d1fae5"),
-                dict(range=[50, 100],  color="#ecfccb"),
-                dict(range=[100, 150], color="#fef3c7"),
-                dict(range=[150, 200], color="#fee2e2"),
-            ],
-            threshold=dict(line=dict(color=C_RED, width=2.5), value=150),
+    fig_wq = empty_fig("No water quality data available")
+    if all([wq_tds_col, wq_do_col, wq_status_col, wq_source_col]):
+        wq_plot = coerce_numeric(wq, [wq_tds_col, wq_do_col])
+        wq_plot = wq_plot.dropna(subset=[wq_tds_col, wq_do_col, wq_status_col, wq_source_col]).copy()
+        if not wq_plot.empty:
+            fig_wq = go.Figure()
+            for status_val, grp in wq_plot.groupby(wq_status_col):
+                dot_color = color_map.get(str(status_val).strip(), "#3b82f6")
+                fig_wq.add_trace(go.Scatter(
+                    x=grp[wq_tds_col],
+                    y=grp[wq_do_col],
+                    mode="markers",
+                    name=str(status_val),
+                    marker=dict(
+                        color=dot_color,
+                        size=12,
+                        opacity=0.90,
+                        line=dict(width=0),
+                    ),
+                    text=grp[wq_source_col].astype(str),
+                    hovertemplate="<b>%{text}</b><br>TDS: %{x} ppm<br>DO: %{y} mg/L<extra></extra>",
+                ))
+
+    fig_wq.update_layout(
+        plot_bgcolor="#f5f7fa",
+        paper_bgcolor="#f5f7fa",
+        font=dict(family="Sora, sans-serif", size=12, color="#334155"),
+        title=dict(
+            text="Dissolved Oxygen vs TDS — All Sources",
+            x=0.02,
+            xanchor="left",
+            font=dict(size=16, family="Sora, sans-serif", color="#0f172a"),
         ),
-    ))
-    fig_aqi.update_layout(**PLgauge(), height=250, margin=dict(l=24, r=24, t=44, b=16))
+        xaxis_title="TDS (ppm)",
+        yaxis_title="Dissolved Oxygen (mg/L)",
+        margin=dict(l=40, r=20, t=60, b=70),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.06)",
+            zeroline=False,
+            linecolor="rgba(0,0,0,0)",
+            tickfont=dict(color="#64748b"),
+            title_font=dict(color="#64748b"),
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.06)",
+            zeroline=False,
+            linecolor="rgba(0,0,0,0)",
+            tickfont=dict(color="#64748b"),
+            title_font=dict(color="#64748b"),
+        ),
+        legend=dict(
+            orientation="h", x=0, y=-0.22,
+            bgcolor="rgba(0,0,0,0)", font_size=11,
+        ),
+    )
 
-    wq_id_col     = find_col(wq, ["sample_id", "sampleId", "id", "sample_no", "Sample no.", "Sample no"])
-    wq_label_col  = find_col(wq, ["source_name", "sourceName", "source", "location", "label", "Label"])
-    wq_ph_col     = find_col(wq, ["pH", "ph"])
-    wq_ec_col     = find_col(wq, ["EC_mS", "EC_uS", "EC", "ec"])
-    wq_tds_col2   = find_col(wq, ["TDS_ppm", "TDS", "tds"])
-    wq_do_col2    = find_col(wq, ["DO_mg_L", "DO", "do"])
-    wq_ntu_col    = find_col(wq, ["turbidity_NTU", "turbidity", "NTU", "ntu"])
-    wq_drink_col  = find_col(wq, ["drinking_status", "drinkingStatus", "status", "Status"])
+    # ═════════════════════════════════════════════════════════════════════════
+    # WATER QUALITY SUMMARY TABLE
+    # ═════════════════════════════════════════════════════════════════════════
+    wq_id_col    = find_col(wq, ["sample_id", "sampleId", "id", "sample_no", "Sample no.", "Sample no"])
+    wq_label_col = find_col(wq, ["source_name", "sourceName", "source", "location", "label", "Label"])
+    wq_ph_col    = find_col(wq, ["pH", "ph"])
+    wq_ec_col    = find_col(wq, ["EC_mS", "EC_uS", "EC", "ec"])
+    wq_tds_col2  = find_col(wq, ["TDS_ppm", "TDS", "tds"])
+    wq_do_col2   = find_col(wq, ["DO_mg_L", "DO", "do"])
+    wq_ntu_col   = find_col(wq, ["turbidity_NTU", "turbidity", "NTU", "ntu"])
+    wq_drink_col = find_col(wq, ["drinking_status", "drinkingStatus", "status", "Status"])
 
     status_badge_map = {
         "unfit":       "bad",
@@ -3355,72 +3298,320 @@ def page_environment(d):
     wq_table_rows_dynamic = []
     if wq_label_col and not wq.empty:
         for i, (_, row) in enumerate(wq.iterrows()):
-            s_id    = str(row.get(wq_id_col,    f"S{i+1}")).strip() if wq_id_col else f"S{i+1}"
-            label   = str(row.get(wq_label_col, "")).strip()
-            ph_v    = str(round(pd.to_numeric(row.get(wq_ph_col,   "—"), errors="coerce"), 2)) if wq_ph_col else "—"
-            ec_v    = str(round(pd.to_numeric(row.get(wq_ec_col,   "—"), errors="coerce"))) if wq_ec_col else "—"
-            tds_v   = str(round(pd.to_numeric(row.get(wq_tds_col2, "—"), errors="coerce"))) if wq_tds_col2 else "—"
-            do_v    = str(round(pd.to_numeric(row.get(wq_do_col2,  "—"), errors="coerce"), 2)) if wq_do_col2 else "—"
-            ntu_v   = str(round(pd.to_numeric(row.get(wq_ntu_col,  "—"), errors="coerce"), 2)) if wq_ntu_col else "—"
-            status  = str(row.get(wq_drink_col, "—")).strip() if wq_drink_col else "—"
-            bkind   = status_badge_map.get(status.lower(), "info")
+            s_id  = str(row.get(wq_id_col,    f"S{i+1}")).strip() if wq_id_col else f"S{i+1}"
+            label = str(row.get(wq_label_col, "")).strip()
+            ph_v  = str(round(pd.to_numeric(row.get(wq_ph_col,   "—"), errors="coerce"), 2)) if wq_ph_col  else "—"
+            ec_v  = str(round(pd.to_numeric(row.get(wq_ec_col,   "—"), errors="coerce")))    if wq_ec_col  else "—"
+            tds_v = str(round(pd.to_numeric(row.get(wq_tds_col2, "—"), errors="coerce")))    if wq_tds_col2 else "—"
+            do_v  = str(round(pd.to_numeric(row.get(wq_do_col2,  "—"), errors="coerce"), 2)) if wq_do_col2 else "—"
+            ntu_v = str(round(pd.to_numeric(row.get(wq_ntu_col,  "—"), errors="coerce"), 2)) if wq_ntu_col else "—"
+            status = str(row.get(wq_drink_col, "—")).strip() if wq_drink_col else "—"
+            bkind  = status_badge_map.get(status.lower(), "info")
             ph_v  = ph_v  if ph_v  != "nan" else "—"
             ec_v  = ec_v  if ec_v  != "nan" else "—"
             tds_v = tds_v if tds_v != "nan" else "—"
             do_v  = do_v  if do_v  != "nan" else "—"
             ntu_v = ntu_v if ntu_v != "nan" else "—"
             wq_table_rows_dynamic.append([
-                (s_id,  0.5),
-                (label, 2),
-                (ph_v,  0.6),
-                (ec_v,  0.8),
-                (tds_v, 0.8),
-                (do_v,  0.6),
-                (ntu_v, 0.8),
-                (badge(status, bkind), 1),
+                (s_id,  0.5), (label, 2), (ph_v, 0.6), (ec_v, 0.8),
+                (tds_v, 0.8), (do_v, 0.6), (ntu_v, 0.8), (badge(status, bkind), 1),
             ])
 
     wq_table_rows_fallback = [
-        [("S1",  0.5), ("Effluent Household",    2), ("7.52", 0.6), ("1990", 0.8), ("1420", 0.8), ("1.8",  0.6), ("10.46", 0.8), (badge("Unfit",       "bad"),  1)],
-        [("S2",  0.5), ("Borewell (Closed Tank)",2), ("7.42", 0.6), ("1549", 0.8), ("1120", 0.8), ("6.55", 0.6), ("7.12",  0.8), (badge("Treat First",  "warn"), 1)],
-        [("S3",  0.5), ("Borewell (Open Tank)",  2), ("7.33", 0.6), ("1619", 0.8), ("1150", 0.8), ("6.17", 0.6), ("0.43",  0.8), (badge("Treat First",  "warn"), 1)],
-        [("S4",  0.5), ("Effluent (Common Drain)",2),("7.35", 0.6), ("1193", 0.8), ("912",  0.8), ("7.89", 0.6), ("3.56",  0.8), (badge("Unfit",        "bad"),  1)],
-        [("S5",  0.5), ("Right Lake",             2), ("7.73", 0.6), ("443",  0.8), ("312",  0.8), ("9.48", 0.6), ("2.99",  0.8), (badge("Borderline",   "warn"), 1)],
-        [("S6",  0.5), ("Bund Water",             2), ("7.55", 0.6), ("624",  0.8), ("305",  0.8), ("8.62", 0.6), ("0.30",  0.8), (badge("Agriculture",  "info"), 1)],
-        [("S7",  0.5), ("Left Lake",              2), ("8.41", 0.6), ("720",  0.8), ("288",  0.8), ("9.26", 0.6), ("2.08",  0.8), (badge("Borderline",   "warn"), 1)],
-        [("S8",  0.5), ("Central Lake",           2), ("7.72", 0.6), ("846",  0.8), ("297",  0.8), ("9.13", 0.6), ("1.42",  0.8), (badge("Borderline",   "warn"), 1)],
-        [("S9",  0.5), ("Poultry Farm BW",        2), ("6.61", 0.6), ("538",  0.8), ("378",  0.8), ("7.03", 0.6), ("0.32",  0.8), (badge("Treat First",  "warn"), 1)],
-        [("S10", 0.5), ("Piggery Water",          2), ("6.25", 0.6), ("112",  0.8), ("204",  0.8), ("8.91", 0.6), ("BDL",   0.8), (badge("Agriculture",  "info"), 1)],
+        [("S1",  0.5), ("Effluent Household",     2), ("7.52", 0.6), ("1990", 0.8), ("1420", 0.8), ("1.8",  0.6), ("10.46", 0.8), (badge("Unfit",       "bad"),  1)],
+        [("S2",  0.5), ("Borewell (Closed Tank)", 2), ("7.42", 0.6), ("1549", 0.8), ("1120", 0.8), ("6.55", 0.6), ("7.12",  0.8), (badge("Treat First", "warn"), 1)],
+        [("S3",  0.5), ("Borewell (Open Tank)",   2), ("7.33", 0.6), ("1619", 0.8), ("1150", 0.8), ("6.17", 0.6), ("0.43",  0.8), (badge("Treat First", "warn"), 1)],
+        [("S4",  0.5), ("Effluent (Common Drain)",2), ("7.35", 0.6), ("1193", 0.8), ("912",  0.8), ("7.89", 0.6), ("3.56",  0.8), (badge("Unfit",       "bad"),  1)],
+        [("S5",  0.5), ("Right Lake",             2), ("7.73", 0.6), ("443",  0.8), ("312",  0.8), ("9.48", 0.6), ("2.99",  0.8), (badge("Borderline",  "warn"), 1)],
+        [("S6",  0.5), ("Bund Water",             2), ("7.55", 0.6), ("624",  0.8), ("305",  0.8), ("8.62", 0.6), ("1.30",  0.8), (badge("Agriculture", "info"), 1)],
+        [("S7",  0.5), ("Left Lake",              2), ("8.41", 0.6), ("720",  0.8), ("288",  0.8), ("9.26", 0.6), ("2.08",  0.8), (badge("Borderline",  "warn"), 1)],
+        [("S8",  0.5), ("Central Lake",           2), ("7.72", 0.6), ("846",  0.8), ("297",  0.8), ("9.13", 0.6), ("1.42",  0.8), (badge("Borderline",  "warn"), 1)],
+        [("S9",  0.5), ("Poultry Farm Borewell",  2), ("6.61", 0.6), ("538",  0.8), ("378",  0.8), ("7.03", 0.6), ("0.32",  0.8), (badge("Treat First", "warn"), 1)],
+        [("S10", 0.5), ("Piggery Water",          2), ("6.25", 0.6), ("112",  0.8), ("204",  0.8), ("8.91", 0.6), ("BDL",   0.8), (badge("Agriculture", "info"), 1)],
     ]
     wq_table_rows = wq_table_rows_dynamic if wq_table_rows_dynamic else wq_table_rows_fallback
 
+    # ═════════════════════════════════════════════════════════════════════════
+    # MICROBIAL ANALYSIS TABLE
+    # ═════════════════════════════════════════════════════════════════════════
+    lc_sample_col  = find_col(lc_raw, ["sample_id", "sampleId", "sample_no", "sample", "Sample"])
+    lc_loc_col     = find_col(lc_raw, ["location", "site", "source", "label"])
+    lc_na_col      = find_col(lc_raw, ["na_plate", "na_plate_count", "na_count", "na_growth", "NA_plate"])
+    lc_emb_col     = find_col(lc_raw, ["emb_indicator", "emb", "EMB", "emb_result"])
+    lc_status_col  = find_col(lc_raw, ["microbial_status", "status", "Status", "result"])
+
     mc_table_rows = []
-    if not mc.empty:
-        for _, row in mc.iterrows():
-            status = row.get("microbial_status", "")
+    if not lc_raw.empty and lc_loc_col:
+        for i, (_, row) in enumerate(lc_raw.iterrows()):
+            s_id   = str(row.get(lc_sample_col, f"S{i+1}")).strip() if lc_sample_col else f"S{i+1}"
+            loc    = str(row.get(lc_loc_col,    "")).strip()
+            na_v   = str(row.get(lc_na_col,     "")).strip() if lc_na_col  else "—"
+            emb_v  = str(row.get(lc_emb_col,    "")).strip() if lc_emb_col else "—"
+            status = str(row.get(lc_status_col, "")).strip() if lc_status_col else "—"
+            for placeholder in ("nan", "", "None"):
+                if na_v   == placeholder: na_v   = "—"
+                if emb_v  == placeholder: emb_v  = "—"
+                if status == placeholder: status = "—"
+            bkind = "bad" if status.lower() == "high" else ("warn" if status.lower() == "moderate" else "info")
             mc_table_rows.append([
-                (str(row.get("location", "")),        2),
-                (str(row.get("na_plate_count", "")),  1),
-                (str(row.get("emb_indicator", "")),   1.5),
-                (badge(status, "bad" if status == "High" else "warn"), 1),
+                (s_id, 0.5), (loc, 2), (na_v, 1), (emb_v, 1.5), (badge(status, bkind), 1),
+            ])
+    elif not mc.empty:
+        mc_loc_col    = find_col(mc, ["location", "site", "source"])
+        mc_na_col     = find_col(mc, ["na_plate_count", "na_plate", "na_count"])
+        mc_emb_col    = find_col(mc, ["emb_indicator", "emb", "EMB"])
+        mc_status_col = find_col(mc, ["microbial_status", "status"])
+        for i, (_, row) in enumerate(mc.iterrows()):
+            s_id   = f"S{i+1}"
+            loc    = str(row.get(mc_loc_col,    "")).strip() if mc_loc_col    else "—"
+            na_v   = str(row.get(mc_na_col,     "")).strip() if mc_na_col     else "—"
+            emb_v  = str(row.get(mc_emb_col,    "")).strip() if mc_emb_col    else "—"
+            status = str(row.get(mc_status_col, "")).strip() if mc_status_col else "—"
+            bkind  = "bad" if status.lower() == "high" else ("warn" if status.lower() == "moderate" else "info")
+            mc_table_rows.append([
+                (s_id, 0.5), (loc, 2), (na_v, 1), (emb_v, 1.5), (badge(status, bkind), 1),
             ])
 
-    _calib_charts_init, _calib_metrics_init = _build_calib_content("overlay")
+    if not mc_table_rows:
+        mc_table_rows = [
+            [("S1", 0.5), ("Lake BH Entry 1", 2), ("Moderate (257 col)", 1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
+            [("S2", 0.5), ("Lake BH Entry 2", 2), ("TNTC",               1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
+            [("S3", 0.5), ("Lake BH Entry 3", 2), ("TNTC",               1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
+            [("S4", 0.5), ("Lake BH 2",       2), ("High (380 col)",     1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
+            [("S5", 0.5), ("Lake EF 1",       2), ("TNTC",               1), ("High coliform load",     1.5), (badge("High",     "bad"),  1)],
+            [("S6", 0.5), ("Lake BH 3",       2), ("TNTC / 200",         1), ("Mixed enteric flora",    1.5), (badge("High",     "bad"),  1)],
+        ]
 
+    # ═════════════════════════════════════════════════════════════════════════
+    # CHART 2 (RIGHT) — Soil Microbial Load
+    # ═════════════════════════════════════════════════════════════════════════
+    fig_soil = empty_fig("No soil data available")
+    if not soil_df.empty:
+        site_col = find_col(soil_df, ["site", "name", "location", "site_name"])
+        na2_col  = find_col(soil_df, ["na_growth_10_2"])
+        na6_col  = find_col(soil_df, ["colony_count_10_6"])
+        emb_col  = find_col(soil_df, ["e_coli_present"])
+
+        if site_col and any([na2_col, na6_col, emb_col]):
+            sp = coerce_numeric(soil_df, [c for c in [na2_col, na6_col, emb_col] if c]).copy()
+            sp = sp.dropna(subset=[site_col])
+            n  = min(len(sp), 3)
+            x_labels = sp[site_col].astype(str).tolist()[:n]
+
+            na2_vals = pd.to_numeric(sp[na2_col], errors="coerce").fillna(0).values[:n] if na2_col else [0]*n
+            na6_vals = pd.to_numeric(sp[na6_col], errors="coerce").fillna(0).values[:n] if na6_col else [0]*n
+            emb_vals = pd.to_numeric(sp[emb_col], errors="coerce").fillna(0).values[:n] if emb_col else [0]*n
+
+            fig_soil = go.Figure()
+            fig_soil.add_trace(go.Bar(
+                x=x_labels, y=na2_vals,
+                name="NA (10⁻²) — Growth",
+                marker=dict(color="#e8573a", opacity=0.90, line=dict(width=0), cornerradius=6),
+                hovertemplate="<b>%{x}</b><br>NA (10⁻²): %{y:.1f}<extra></extra>",
+            ))
+            fig_soil.add_trace(go.Bar(
+                x=x_labels, y=na6_vals,
+                name="NA (10⁻⁶) — Colony Count",
+                marker=dict(color="#60a5fa", opacity=0.90, line=dict(width=0), cornerradius=6),
+                hovertemplate="<b>%{x}</b><br>NA (10⁻⁶): %{y:.1f}<extra></extra>",
+            ))
+            fig_soil.add_trace(go.Bar(
+                x=x_labels, y=emb_vals,
+                name="EMB — E. coli Indicator",
+                marker=dict(color="#86efac", opacity=0.90, line=dict(width=0), cornerradius=6),
+                hovertemplate="<b>%{x}</b><br>EMB: %{y:.1f}<extra></extra>",
+            ))
+            fig_soil.update_layout(
+                barmode="group",
+                bargap=0.25,
+                bargroupgap=0.08,
+                plot_bgcolor="#f5f7fa",
+                paper_bgcolor="#f5f7fa",
+                font=dict(family="Sora, sans-serif", size=12, color="#334155"),
+                title=dict(
+                    text="Soil Microbial Load — Three Sites",
+                    x=0.02,
+                    xanchor="left",
+                    font=dict(size=16, family="Sora, sans-serif", color="#0f172a"),
+                ),
+                legend=dict(
+                    orientation="h", yanchor="top", y=-0.22,
+                    xanchor="center", x=0.5,
+                    font=dict(size=11, color="#334155"),
+                    bgcolor="rgba(0,0,0,0)",
+                ),
+                margin=dict(l=40, r=20, t=60, b=90),
+                xaxis=dict(
+                    showgrid=False,
+                    linecolor="rgba(0,0,0,0.08)",
+                    tickfont=dict(size=11, color="#64748b"),
+                    title_text="",
+                ),
+                yaxis=dict(
+                    range=[0, 120],
+                    tickvals=[0, 20, 40, 60, 80, 100, 120],
+                    showgrid=True,
+                    gridcolor="rgba(0,0,0,0.07)",
+                    zeroline=False,
+                    linecolor="rgba(0,0,0,0)",
+                    tickfont=dict(color="#64748b"),
+                    title_text="",
+                ),
+            )
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # GRAM STAINING
+    # ═════════════════════════════════════════════════════════════════════════
+    gram_pos_pct = max(0.0, 100.0 - gram_neg_pct)
+
+    
+    # ═════════════════════════════════════════════════════════════════════════
+    # AQI — doughnut + gradient scale bar  ★ SPACING FIXED ★
+    # ═════════════════════════════════════════════════════════════════════════
+    aqi_headroom = max(0.0, 200.0 - aqi_val)
+
+    if aqi_val <= 50:
+        aqi_range_label = "Good"
+        aqi_ring_color  = "#22c55e"
+    elif aqi_val <= 100:
+        aqi_range_label = "Moderate"
+        aqi_ring_color  = "#f59e0b"
+    elif aqi_val <= 150:
+        aqi_range_label = "Unhealthy for Sensitive"
+        aqi_ring_color  = "#f97316"
+    elif aqi_val <= 200:
+        aqi_range_label = "Unhealthy"
+        aqi_ring_color  = "#ef4444"
+    else:
+        aqi_range_label = "Very Unhealthy"
+        aqi_ring_color  = "#9333ea"
+
+    marker_x = min(max(aqi_val / 300.0, 0.0), 1.0)
+
+    fig_aqi_donut = go.Figure()
+
+    # ── Doughnut — centered ───────────────────────────────────────────────────
+    fig_aqi_donut.add_trace(go.Pie(
+        labels=["AQI", "Headroom"],
+        values=[aqi_val, aqi_headroom],
+        hole=0.62,
+        marker_colors=[aqi_ring_color, "#e2e8f0"],
+        textinfo="none",
+        hovertemplate="<b>%{label}</b><br>%{value}<extra></extra>",
+        showlegend=False,
+        domain=dict(x=[0.15, 0.55], y=[0.28, 0.96]),
+    ))
+
+    # ── AQI number — centred inside donut ─────────────────────────────────────
+    fig_aqi_donut.add_annotation(
+        text=f"<b>{int(aqi_val) if aqi_val else '—'}</b>",
+        x=0.35, y=0.67,
+        xref="paper", yref="paper",
+        xanchor="center", yanchor="middle",
+        showarrow=False,
+        font=dict(size=42, color=aqi_ring_color, family="'DM Mono',monospace"),
+    )
+    fig_aqi_donut.add_annotation(
+        text="AQI",
+        x=0.35, y=0.52,
+        xref="paper", yref="paper",
+        xanchor="center", yanchor="middle",
+        showarrow=False,
+        font=dict(size=14, color=MUTED, family="'Sora',sans-serif"),
+    )
+
+    # ── Subtitle ──────────────────────────────────────────────────────────────
+    fig_aqi_donut.add_annotation(
+        text=f"Doughnut shows current AQI ({int(aqi_val) if aqi_val else '—'}) vs headroom to max (200). Scale: 0–300.",
+        x=0.0, y=1.13,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(size=10, color=MUTED, family="'DM Mono',monospace"),
+        xanchor="left",
+    )
+
+    # ── Gradient scale bar segments ───────────────────────────────────────────
+    segments = [
+        (0,   50,  "#22c55e"),
+        (50,  100, "#a3e635"),
+        (100, 150, "#f59e0b"),
+        (150, 200, "#f97316"),
+        (200, 250, "#ef4444"),
+        (250, 300, "#a855f7"),
+    ]
+    for seg_start, seg_end, seg_color in segments:
+        x0 = seg_start / 300.0
+        x1 = seg_end   / 300.0
+        fig_aqi_donut.add_shape(
+            type="rect",
+            x0=x0, x1=x1,
+            y0=0.09, y1=0.17,
+            xref="paper", yref="paper",
+            fillcolor=seg_color,
+            line=dict(width=0),
+            opacity=0.90,
+        )
+
+    # ── Scale bar labels ──────────────────────────────────────────────────────
+    for label_val, label_text in [
+        (0,   "0"),
+        (75,  "Good"),
+        (200, "Moderate"),
+        (225, "Unhealthy"),
+        (300, "300"),
+    ]:
+        fig_aqi_donut.add_annotation(
+            text=label_text,
+            x=label_val / 300.0,
+            y=0.05,
+            xref="paper", yref="paper",
+            showarrow=False,
+            font=dict(
+                size=10,
+                color="#22c55e"  if label_text == "Good"
+                      else "#f59e0b" if label_text == "Moderate"
+                      else "#ef4444" if label_text == "Unhealthy"
+                      else MUTED,
+                family="'Sora',sans-serif",
+            ),
+            xanchor="center",
+        )
+
+    # ── AQI marker triangle ───────────────────────────────────────────────────
+    fig_aqi_donut.add_annotation(
+        text=f"▲ {int(aqi_val) if aqi_val else '—'}",
+        x=marker_x,
+        y=0.20,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(size=11, color=aqi_ring_color, family="'DM Mono',monospace"),
+        xanchor="center",
+    )
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+    _aqi_layout = PLna("Air Quality & Atmospheric Conditions")
+    _aqi_layout["height"]  = 420
+    _aqi_layout["margin"]  = dict(l=30, r=30, t=90, b=60)
+    fig_aqi_donut.update_layout(**_aqi_layout)
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # LAYOUT
+    # ═════════════════════════════════════════════════════════════════════════
     return html.Div([
-        section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY · CALIBRATION"),
+        section_banner("Environment Pillar", "WATER · MICROBIOLOGY · GRAM STAINING · SOIL · AIR QUALITY"),
 
         grid4([
-            kpi_card("AQI Level",              fmt_num(aqi_val), "",    "Live — Bangalore air quality",       "amber"),
-            kpi_card("Humidity",               humidity_val,     "%",   "Live — Bangalore weather",           "blue"),
-            kpi_card("Effluent TDS (Sample 1)", effluent_tds,    "ppm", "S1 Effluent Household — WHO lim 500","red"),
-            kpi_card("Gram –ve Isolates",      f"{gram_neg_count}/{total_isolates}", "",
-                     f"{gram_neg_pct:.1f}% Gram-negative of {total_isolates} isolates", "purple"),
+            kpi_card("AQI Level",               aqi_display,  "",    "Live — Bangalore air quality",   "amber"),
+            kpi_card("Humidity",                humidity_val, "%",   "Live — Bangalore weather",        "blue"),
+            kpi_card("Effluent TDS (Sample 1)", effluent_tds, "ppm", "ppm — WHO limit: 500 ppm",       "red"),
+            kpi_card("Gram Staining: Gram –ve",
+                     f"{int(round(gram_neg_pct))}", "%",
+                     f"All {total_isolates} isolates — water & soil", "purple"),
         ]),
 
         grid2([
-            chart_card(dcc.Graph(figure=fig_wq,       config={"displayModeBar": False}), "blue"),
-            chart_card(dcc.Graph(figure=fig_physchem, config={"displayModeBar": False}), "purple"),
+            chart_card(dcc.Graph(figure=fig_tds_bar, config={"displayModeBar": False}), "amber"),
+            chart_card(dcc.Graph(figure=fig_wq,      config={"displayModeBar": False}), "blue"),
         ]),
 
         html.Div([
@@ -3428,26 +3619,78 @@ def page_environment(d):
             html.Div(style={"height": "6px"}),
             card_title("Water Quality Summary Table — Full Panel"),
             data_table_wrap(
-                [("Sample", 0.5), ("Source", 2), ("pH", 0.6), ("EC µS", 0.8), ("TDS ppm", 0.8), ("DO mg/L", 0.6), ("NTU", 0.8), ("Drinking?", 1)],
+                [("Sample", 0.5), ("Source", 2), ("pH", 0.6), ("EC (mS)", 0.8),
+                 ("TDS (ppm)", 0.8), ("DO (mg/L)", 0.6), ("Turbidity (NTU)", 0.8), ("Drinking?", 1)],
                 wq_table_rows,
             ),
-            html.P("WHO drinking water TDS limit: 500 ppm | Turbidity limit: <1 NTU | DO >6 mg/L recommended",
-                   style={"fontSize": "11px", "color": MUTED, "marginTop": "6px"}),
+            html.P(
+                "WHO drinking water TDS limit: 500 ppm | Turbidity limit: <1 NTU | DO >6 mg/L recommended",
+                style={"fontSize": "11px", "color": MUTED, "marginTop": "6px"},
+            ),
         ], style={**CARD_STYLE, "marginBottom": "20px"}),
 
         grid2([
-            chart_card(dcc.Graph(figure=fig_vc,   config={"displayModeBar": False}), "blue"),
-            chart_card(dcc.Graph(figure=fig_lc,   config={"displayModeBar": False}), "red"),
+            html.Div([
+                card_top_bar(C_RED),
+                html.Div(style={"height": "6px"}),
+                card_title("Microbial Analysis — Water Samples (Lake Entries)"),
+                data_table_wrap(
+                    [("Sample", 0.5), ("Location", 2), ("NA Plate", 1), ("EMB Indicator", 1.5), ("Status", 1)],
+                    mc_table_rows,
+                ),
+                html.P(
+                    "Media: NA, EMB, XLD | Incubation: 37°C, 24 hrs | Date: 22/01/2026",
+                    style={"fontSize": "11px", "color": MUTED},
+                ),
+            ], style=CARD_STYLE),
+
+            chart_card(dcc.Graph(figure=fig_soil, config={"displayModeBar": False}), "amber"),
         ]),
 
         grid2([
-            chart_card(dcc.Graph(figure=fig_soil, config={"displayModeBar": False}), "amber"),
-            chart_card(dcc.Graph(figure=fig_aqi,  config={"displayModeBar": False}), "amber"),
-        ]),
+            html.Div([
+                card_top_bar(C_GREEN),
+                html.Div(style={"height": "6px"}),
+                card_title(f"Gram Staining Summary — {total_isolates} Isolates"),
+                progress_bar(
+                    "Gram Negative (all isolates)",
+                    f"{gram_neg_count}/{total_isolates} = {gram_neg_pct:.0f}%",
+                    gram_neg_pct, "red",
+                ),
+                progress_bar(
+                    "Bacillus morphology",
+                    f"~{bacillus_pct:.0f}% of isolates",
+                    bacillus_pct, "blue",
+                ),
+                progress_bar(
+                    "Cocci morphology",
+                    f"~{cocci_pct:.0f}% of isolates",
+                    cocci_pct, "green",
+                ),
+                progress_bar(
+                    "Mucoid layer presence",
+                    f"~{mucoid_pct:.0f}% of isolates",
+                    mucoid_pct, "purple",
+                ),
+                html.Div([
+                    html.P([
+                        f"All {total_isolates} tested isolates from water and soil samples were ",
+                        html.Strong("Gram-negative", style={"color": C_RED}),
+                        f". Dominant types include rod-shaped (Bacillus) and spherical (Cocci) forms. "
+                        f"Mucoid layers observed in ~{mucoid_pct:.0f}% suggest capsule-forming, "
+                        f"potentially pathogenic organisms.",
+                    ], style={"fontSize": "12px", "color": MUTED, "lineHeight": "1.6", "margin": "0"}),
+                ], style={
+                    "padding": "12px",
+                    "background": rgba(C_RED, 0.05),
+                    "borderRadius": "8px",
+                    "borderLeft": f"3px solid {C_RED}",
+                    "marginTop": "10px",
+                }),
+            ], style=CARD_STYLE),
 
-        html.Div([
-            chart_card(dcc.Graph(figure=fig_gr, config={"displayModeBar": False}), "red", span=1),
-        ], style={"marginBottom": "24px"}),
+            chart_card(dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False}), "amber"),
+        ]),
 
         html.Div([
             card_top_bar(C_BLUE),
@@ -3456,9 +3699,9 @@ def page_environment(d):
             dcc.RadioItems(
                 id="calib-toggle",
                 options=[
-                    {"label": "  Overlay (both drugs)",  "value": "overlay"},
-                    {"label": "  Doxycycline only",      "value": "doxy"},
-                    {"label": "  Amoxicillin only",      "value": "amox"},
+                    {"label": "  Overlay (both drugs)", "value": "overlay"},
+                    {"label": "  Doxycycline only",     "value": "doxy"},
+                    {"label": "  Amoxicillin only",     "value": "amox"},
                 ],
                 value="overlay",
                 inline=True,
@@ -3470,66 +3713,9 @@ def page_environment(d):
                 },
                 style={"marginBottom": "14px"},
             ),
-            html.Div(id="calib-metrics", children=_calib_metrics_init),
-            html.Div(id="calib-charts",  children=_calib_charts_init),
+            html.Div(id="calib-metrics", children=[]),
+            html.Div(id="calib-charts",  children=[]),
         ], style={**CARD_STYLE, "marginBottom": "20px"}),
-
-        grid2([
-            html.Div([
-                card_top_bar(C_RED),
-                html.Div(style={"height": "6px"}),
-                card_title("Microbial Analysis — Water Samples (Lake Entries)"),
-                data_table_wrap(
-                    [("Location", 2), ("NA Plate", 1), ("EMB Indicator", 1.5), ("Status", 1)],
-                    mc_table_rows if mc_table_rows else [
-                        [("Lake BH Entry 1", 2), ("Moderate (257 col)", 1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
-                        [("Lake BH Entry 2", 2), ("TNTC",              1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
-                        [("Lake BH Entry 3", 2), ("TNTC",              1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
-                        [("Lake BH 2",       2), ("High (380 col)",    1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
-                        [("Lake EF 1",       2), ("TNTC",              1), ("High coliform load",     1.5), (badge("High",     "bad"),  1)],
-                        [("Lake BH 3",       2), ("TNTC / 200",        1), ("Mixed enteric flora",    1.5), (badge("High",     "bad"),  1)],
-                    ]
-                ),
-                html.P("Media: NA, EMB, XLD | Incubation: 37°C, 24 hrs | Date: 22/01/2026",
-                       style={"fontSize": "11px", "color": MUTED}),
-            ], style=CARD_STYLE),
-
-            html.Div([
-                card_top_bar(C_GREEN),
-                html.Div(style={"height": "6px"}),
-                card_title(f"Gram Staining Summary — {total_isolates} Isolates"),
-                progress_bar(
-                    "Gram Negative (all isolates)",
-                    f"{gram_neg_count}/{total_isolates} = {gram_neg_pct:.1f}%",
-                    gram_neg_pct, "red"
-                ),
-                progress_bar(
-                    "Bacillus morphology",
-                    f"~{bacillus_pct:.1f}% of isolates",
-                    bacillus_pct, "blue"
-                ),
-                progress_bar(
-                    "Cocci morphology",
-                    f"~{cocci_pct:.1f}% of isolates",
-                    cocci_pct, "green"
-                ),
-                progress_bar(
-                    "Mucoid layer presence",
-                    f"~{mucoid_pct:.1f}% of isolates",
-                    mucoid_pct, "purple"
-                ),
-                html.Div([
-                    html.P([
-                        f"{gram_neg_count} of {total_isolates} tested isolates were ",
-                        html.Strong("Gram-negative", style={"color": C_RED}),
-                        f" ({gram_neg_pct:.1f}%). Dominant types: rod-shaped (Bacillus ~{bacillus_pct:.0f}%) and "
-                        f"spherical (Cocci ~{cocci_pct:.0f}%). "
-                        f"Mucoid layers in ~{mucoid_pct:.0f}% suggest capsule-forming, potentially pathogenic organisms.",
-                    ], style={"fontSize": "12px", "color": MUTED, "lineHeight": "1.6", "margin": "0"}),
-                ], style={"padding": "12px", "background": rgba(C_RED, 0.05), "borderRadius": "8px",
-                          "borderLeft": f"3px solid {C_RED}"}),
-            ], style=CARD_STYLE),
-        ]),
 
         html.Div([
             card_top_bar(C_BLUE),
@@ -3538,15 +3724,19 @@ def page_environment(d):
             data_table_wrap(
                 [("ID", 0.5), ("Sample Label", 2), ("Field Observation", 4)],
                 [
-                    [(f"S{int(row['Sample no.'])}" if pd.notna(row.get("Sample no.")) else "", 0.5),
-                     (str(row.get("Label", "")).strip(), 2),
-                     (str(row.get("Label Description", ""))[:120] + ("…" if len(str(row.get("Label Description", ""))) > 120 else ""), 4)]
-                    for _, row in pv.iterrows() if pd.notna(row.get("Label Description", ""))
+                    [
+                        (f"S{int(row['Sample no.'])}" if pd.notna(row.get("Sample no.")) else "", 0.5),
+                        (str(row.get("Label", "")).strip(), 2),
+                        (str(row.get("Label Description", ""))[:120]
+                         + ("…" if len(str(row.get("Label Description", ""))) > 120 else ""), 4),
+                    ]
+                    for _, row in pv.iterrows()
+                    if pd.notna(row.get("Label Description", ""))
                 ]
             ),
         ], style={**CARD_STYLE, "marginBottom": "20px"}) if not pv.empty else html.Div(),
     ])
-
+#################################################################
 
 def page_interconnections(d):
     try:
