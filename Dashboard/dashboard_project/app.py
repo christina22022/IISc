@@ -2856,39 +2856,54 @@ def page_animal(d):
         col_abc     = find_col(rp, ["withAbc",            "with_abc"])
         col_abcvacc = find_col(rp, ["withAbcVaccination", "with_abc_vaccination"])
 
-        # Pull data lists – fallback to static dashboard values if empty
         def _series(col, fallback):
             if col:
                 vals = coerce_numeric(rp_plot, [col])[col].dropna().tolist()
                 return vals if vals else fallback
             return fallback
 
-        no_abc_data   = _series(col_noabc,   [10, 18, 30, 55, 95])
-        abc_data      = _series(col_abc,     [12, 22, 33, 48, 65])
-        abcvacc_data  = _series(col_abcvacc, [3,  5,  6,  6,  7])
-        n_years = max(len(no_abc_data), len(abc_data), len(abcvacc_data))
-        year_labels   = [f"Year {i+1}" for i in range(n_years)]
+        no_abc_data  = _series(col_noabc,   [10, 18, 30, 55, 95])
+        abc_data     = _series(col_abc,     [12, 22, 33, 48, 65])
+        abcvacc_data = _series(col_abcvacc, [3,  5,  6,  6,  7])
+        n_years      = max(len(no_abc_data), len(abc_data), len(abcvacc_data))
+        year_labels  = [f"Year {i+1}" for i in range(n_years)]
 
         fig_rab = go.Figure()
+        # Order: No ABC first (orange), With ABC (purple), ABC+Vacc (green) — matches static
         fig_rab.add_trace(go.Bar(
             name="Infected (No ABC)",
-            x=year_labels, y=no_abc_data,
-            marker_color="rgba(255,112,67,0.75)",
-            marker_line_color="#ff7043", marker_line_width=1,
+            x=year_labels,
+            y=no_abc_data,
+            marker=dict(
+                color="#e8622a",          # deep burnt orange — matches static
+                line=dict(color="#c94d1a", width=0),
+                cornerradius=6,           # rounded tops
+                opacity=1.0,
+            ),
             hovertemplate="<b>No ABC</b><br>Year: %{x}<br>Cases: %{y}<extra></extra>",
         ))
         fig_rab.add_trace(go.Bar(
             name="Infected (With ABC)",
-            x=year_labels, y=abc_data,
-            marker_color="rgba(171,71,188,0.70)",
-            marker_line_color="#ab47bc", marker_line_width=1,
+            x=year_labels,
+            y=abc_data,
+            marker=dict(
+                color="#9b59b6",          # deep purple — matches static
+                line=dict(color="#7d3c98", width=0),
+                cornerradius=6,
+                opacity=1.0,
+            ),
             hovertemplate="<b>ABC Only</b><br>Year: %{x}<br>Cases: %{y}<extra></extra>",
         ))
         fig_rab.add_trace(go.Bar(
             name="Infected (ABC + Vaccination)",
-            x=year_labels, y=abcvacc_data,
-            marker_color="rgba(105,240,174,0.75)",
-            marker_line_color="#69f0ae", marker_line_width=1,
+            x=year_labels,
+            y=abcvacc_data,
+            marker=dict(
+                color="#27ae60",          # deep green — matches static
+                line=dict(color="#1e8449", width=0),
+                cornerradius=6,
+                opacity=1.0,
+            ),
             hovertemplate="<b>ABC+Vacc</b><br>Year: %{x}<br>Cases: %{y}<extra></extra>",
         ))
         fig_rab.update_layout(
@@ -2896,20 +2911,26 @@ def page_animal(d):
             plot_bgcolor="#ffffff",
             font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
             barmode="group",
-            bargap=0.18,
-            bargroupgap=0.04,
-            margin=dict(l=20, r=20, t=20, b=20),
+            bargap=0.22,
+            bargroupgap=0.05,
+            margin=dict(l=40, r=20, t=20, b=60),
             legend=dict(
                 orientation="h", x=0, y=-0.22,
                 font=dict(size=10, color=TEXT),
                 bgcolor="rgba(0,0,0,0)",
-                itemwidth=30,
+                traceorder="normal",
             ),
             hoverlabel=dict(bgcolor=CARD_BG, bordercolor=BORDER,
                             font=dict(color=TEXT, size=11)),
         )
-        fig_rab.update_xaxes(showgrid=False, tickfont_color=MUTED,
-                              linecolor=BORDER, zerolinecolor=BORDER)
+        fig_rab.update_xaxes(
+            showgrid=False,
+            tickfont=dict(color=MUTED, size=11),
+            linecolor=BORDER,
+            zerolinecolor=BORDER,
+            categoryorder="array",
+            categoryarray=year_labels,
+        )
         fig_rab.update_yaxes(
             title_text="Rabies Cases",
             gridcolor="rgba(0,0,0,0.08)",
@@ -2919,83 +2940,120 @@ def page_animal(d):
             zerolinecolor=BORDER,
         )
 
-    # ── AMR Bar Chart – level vs permissible (matches static exactly) ─────────
+    # ── AMR Control Chart – Doxycycline levels with permissible band ─────────
     fig_amr = empty_fig("No AMR data available")
 
     if amr_ant_col and amr_sample_col and amr_level_col and not amr.empty:
         amr_v = coerce_numeric(amr, [amr_level_col] + ([amr_perm_col] if amr_perm_col else []))
+        doxy_rows = amr_v[
+            amr_v[amr_ant_col].astype(str).str.lower().str.contains("doxy", na=False)
+        ].copy().reset_index(drop=True)
 
-        # Build the same 3-bar chart as static:
-        #   Doxy – Pig Excreta | Doxy – Hen Excreta | Permissible Limit
-        doxy_rows = amr_v[amr_v[amr_ant_col].astype(str).str.lower().str.contains("doxy", na=False)]
+        # Get permissible limit (first doxy row that has it)
+        perm_val = 0.02
+        if amr_perm_col and not doxy_rows.empty:
+            pv = pd.to_numeric(doxy_rows[amr_perm_col].iloc[0], errors="coerce")
+            if pd.notna(pv):
+                perm_val = float(pv)
 
-        chart_labels = []
-        chart_values = []
-        chart_colors = []
-        chart_borders = []
-
+        # Build x labels and y values in order: Pig Excreta, Hen Excreta
+        x_labels = []
+        y_values = []
+        y_colors = []
         for _, row in doxy_rows.iterrows():
             sample = str(row.get(amr_sample_col, "")).strip()
             level  = pd.to_numeric(row.get(amr_level_col, 0), errors="coerce")
-            if pd.isna(level):
-                level = 0.0
-            chart_labels.append(f"Doxy – {sample}")
-            chart_values.append(level)
-            # Green for pig (very low), Blue for hen (moderate)
-            if "pig" in sample.lower():
-                chart_colors.append("#16a34a")
-                chart_borders.append("#16a34a")
-            else:
-                chart_colors.append("#0284c7")
-                chart_borders.append("#0284c7")
+            if pd.isna(level): level = 0.0
+            x_labels.append(sample)
+            y_values.append(level)
+            y_colors.append("#2ecc71" if "pig" in sample.lower() else "#3498db")
 
-        # Add permissible limit bar
-        if amr_perm_col:
-            perm_val = pd.to_numeric(
-                amr_v.loc[amr_v[amr_ant_col].astype(str).str.lower()
-                           .str.contains("doxy", na=False), amr_perm_col].iloc[0],
-                errors="coerce"
-            ) if not doxy_rows.empty else 0.02
-        else:
-            perm_val = 0.02
-        perm_val = 0.02 if pd.isna(perm_val) else float(perm_val)
-
-        chart_labels.append("Permissible\nLimit")
-        chart_values.append(perm_val)
-        chart_colors.append("rgba(255,112,67,0.35)")
-        chart_borders.append("#dc2626")
-
-        if chart_labels:
+        if x_labels:
             fig_amr = go.Figure()
+
+            # ── Green safe zone band (0 to permissible limit) ────────────────
+            fig_amr.add_hrect(
+                y0=0, y1=perm_val,
+                fillcolor="rgba(46,204,113,0.10)",
+                line_width=0,
+                layer="below",
+            )
+
+            # ── Permissible limit line ────────────────────────────────────────
+            fig_amr.add_hline(
+                y=perm_val,
+                line_dash="dash",
+                line_color="#e74c3c",
+                line_width=2,
+                annotation_text=f"Permissible Limit ({perm_val} mg/g)",
+                annotation_font=dict(color="#e74c3c", size=10),
+                annotation_position="top right",
+            )
+
+            # ── Actual level bars ─────────────────────────────────────────────
             fig_amr.add_trace(go.Bar(
-                x=chart_labels,
-                y=chart_values,
-                marker_color=chart_colors,
-                marker_line_color=chart_borders,
-                marker_line_width=1.5,
+                x=x_labels,
+                y=y_values,
+                marker=dict(
+                    color=y_colors,
+                    line=dict(width=0),
+                    cornerradius=6,
+                    opacity=1.0,
+                ),
                 hovertemplate="<b>%{x}</b><br>Level: %{y:.6f} mg/g<extra></extra>",
+                showlegend=False,
             ))
+
+            # ── Scatter dots on top of bars for the control-chart look ────────
+            fig_amr.add_trace(go.Scatter(
+                x=x_labels,
+                y=y_values,
+                mode="markers",
+                marker=dict(
+                    color="white",
+                    size=10,
+                    line=dict(color="#2c3e50", width=2),
+                    symbol="circle",
+                ),
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+
+            # ── Connecting line (control chart style) ─────────────────────────
+            fig_amr.add_trace(go.Scatter(
+                x=x_labels,
+                y=y_values,
+                mode="lines",
+                line=dict(color="#2c3e50", width=1.8, dash="dot"),
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+
             fig_amr.update_layout(
                 paper_bgcolor="#ffffff",
                 plot_bgcolor="#ffffff",
                 font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
                 showlegend=False,
-                margin=dict(l=20, r=20, t=20, b=20),
+                margin=dict(l=50, r=20, t=30, b=40),
                 hoverlabel=dict(bgcolor=CARD_BG, bordercolor=BORDER,
                                 font=dict(color=TEXT, size=11)),
             )
-            fig_amr.update_xaxes(showgrid=False, tickfont_color=MUTED,
-                                  linecolor=BORDER, zerolinecolor=BORDER)
+            fig_amr.update_xaxes(
+                showgrid=False,
+                tickfont=dict(color=MUTED, size=11),
+                linecolor=BORDER,
+                zerolinecolor=BORDER,
+            )
             fig_amr.update_yaxes(
                 title_text="mg/g",
-                gridcolor="rgba(0,0,0,0.08)",
+                gridcolor="rgba(0,0,0,0.07)",
                 title_font_color=MUTED,
                 tickfont_color=MUTED,
                 linecolor=BORDER,
                 zerolinecolor=BORDER,
+                rangemode="tozero",
             )
 
-    # ─────────────────────────────────────────────────────────────────────────
     # LAYOUT  – mirrors static OneHealth_Dashboard2.html structure exactly
     # ─────────────────────────────────────────────────────────────────────────
     return html.Div([
