@@ -315,6 +315,34 @@ def fetch(tab_name):
 #────────────────────────────────────────────────────────────────────────────
 #-----------CHAT BOT----------------------------------------------------------------------------------------------------------------------------------------------------
 #────────────────────────────────────────────────────────────────────────────
+def fetch_weather():
+    try:
+        import re
+        resp = requests.get(
+            "https://www.aqi.in/weather/in/india/karnataka/bangalore",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
+        match = re.search(r'meta-description:\s*(.+)', resp.text)
+        if match:
+            return match.group(1).strip()
+        text = resp.text
+        temp = re.search(r'temperature \(([^)]+)\)', text)
+        hum  = re.search(r'humidity (\d+%)', text)
+        wind = re.search(r'wind ([^,]+)', text)
+        uv   = re.search(r'UV \(([^)]+)\)', text)
+        vis  = re.search(r'visibility \(([^)]+)\)', text)
+        parts = []
+        if temp: parts.append(f"Temperature:{temp.group(1)}")
+        if hum:  parts.append(f"Humidity:{hum.group(1)}")
+        if wind: parts.append(f"Wind:{wind.group(1)}")
+        if uv:   parts.append(f"UV Index:{uv.group(1)}")
+        if vis:  parts.append(f"Visibility:{vis.group(1)}")
+        return ", ".join(parts)
+    except Exception as e:
+        return f"unavailable ({e})"
+    
+
 SYSTEM_PROMPT = (
     "You are ONE Health Bot, a friendly and helpful assistant for the One Health Dashboard of Bettahalasuru village, Karnataka.\n"
     "You were built to help users understand health data about this village in a warm, conversational and informative way.\n"
@@ -582,6 +610,11 @@ def build_prompt(user_question, history=None):
     except Exception as e:
         print(f"[build_prompt error] {e}")
 
+    weather_keywords = ["weather","temperature","humidity","wind","uv","aqi",
+                        "air quality","rain","forecast","pressure","visibility",
+                        "hot","cold","cloudy","sunny"]
+    needs_weather = any(kw in user_question.lower() for kw in weather_keywords)
+    weather_live = fetch_weather() if needs_weather else "Not fetched (no weather question asked)"
     # ── CONVERSATION HISTORY ─────────────────────────────────────────────
     history_text = ""
     if history:
@@ -646,6 +679,9 @@ Animal Health Insights:
 Air Quality Index   : {aqi}
 Humidity            : {humidity}
 
+── LIVE WEATHER (Bangalore/Bettahalasuru) ──
+{weather_live}
+
 Village Water Quality:
 {water_quality}
 
@@ -694,7 +730,7 @@ def ask_ollama(user_question):
     prompt = build_prompt(user_question)
     try:
         response = requests.post(
-            "http://172.25.32.117:11434/api/generate",
+            "http://10.192.40.225:11434/api/generate",
             json={
                 "model": "gemma",
                 "prompt": prompt,
