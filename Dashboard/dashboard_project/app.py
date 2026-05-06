@@ -203,6 +203,8 @@ def fetch_live_aqi_humidity(force=False):
         _LIVE_AQI_CACHE["humidity"]   = str(hum_val)  if hum_val  is not None else None
         _LIVE_AQI_CACHE["fetched_at"] = now
 
+        return _LIVE_AQI_CACHE["aqi"], _LIVE_AQI_CACHE["humidity"]
+
        # if aqi_val is None:
      #     print(f"[INFO] Live AQI={aqi_val}  Humidity={hum_val}")
      #   else:
@@ -333,6 +335,7 @@ SYSTEM_PROMPT = (
     "13. Always be warm, polite and conversational like a helpful village health assistant.\n"
     "14. ALWAYS answer exactly what the user asked. If they ask for one specific number, give that exact number first. Never replace it with a different but related number.\n"
     "15. First sentence must directly answer only what was asked. Match the question to the exact data field. Never use a related or similar number as a substitute.\n"
+    "16. NEVER mention aqi.in, scrapers, or any website as a data source. If asked, say: I am not able to provide that."
 )
 
 
@@ -440,18 +443,31 @@ def build_prompt(user_question, history=None):
                 if pd.notna(row.get("insight"))
             )
 
-        # ── ENVIRONMENT DATA ─────────────────────────────────────────────
-        # air_quality columns: parameter, value, unit, interpretation
+      # ── ENVIRONMENT DATA ─────────────────────────────────────────────
+        # Try live AQI/humidity from aqi.in first, fall back to Google Sheet
+        live_aqi, live_humidity = fetch_live_aqi_humidity()
+
         aq_df = DATA.get("air_quality", pd.DataFrame())
         aqi = humidity = "N/A"
-        if not aq_df.empty and "parameter" in aq_df.columns and "value" in aq_df.columns:
+
+        if live_aqi:
+            aqi = f"{live_aqi} (Live)"
+        elif not aq_df.empty and "parameter" in aq_df.columns and "value" in aq_df.columns:
             for _, row in aq_df.iterrows():
                 p = str(row["parameter"]).strip().upper()
                 v = str(row["value"]).strip()
                 interp = str(row.get("interpretation", "")).strip()
                 if p == "AQI":
                     aqi = f"{v} ({interp})"
-                elif p == "HUMIDITY":
+
+        if live_humidity:
+            humidity = f"{live_humidity}% (Live)"
+        elif not aq_df.empty and "parameter" in aq_df.columns and "value" in aq_df.columns:
+            for _, row in aq_df.iterrows():
+                p = str(row["parameter"]).strip().upper()
+                v = str(row["value"]).strip()
+                interp = str(row.get("interpretation", "")).strip()
+                if p == "HUMIDITY":
                     humidity = f"{v}% ({interp})"
 
         # final_waterQuality_complete columns: sampleId, sourceName, pH,
@@ -678,9 +694,9 @@ def ask_ollama(user_question):
     prompt = build_prompt(user_question)
     try:
         response = requests.post(
-            "http://10.251.15.225:11434/api/generate",
+            "http://localhost:11434/api/generate",
             json={
-                "model": "llama3.2",
+                "model": "gemma",
                 "prompt": prompt,
                 "stream": False,
                 "options": {
