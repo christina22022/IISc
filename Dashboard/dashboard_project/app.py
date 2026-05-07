@@ -342,6 +342,32 @@ def fetch_weather():
     except Exception as e:
         return f"unavailable ({e})"
     
+def fetch_phf_website():
+    """Scrape PHF website content for chatbot knowledge"""
+    try:
+        import re
+        pages = [
+            "https://pbt-bc.iisc.ac.in/phf/index.html",
+            "https://pbt-bc.iisc.ac.in/phf/ohi.htm",
+            "https://pbt-bc.iisc.ac.in/phf/projects.htm",
+            "https://pbt-bc.iisc.ac.in/phf/events.htm",
+        ]
+        all_text = []
+        for url in pages:
+            try:
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+                # Strip HTML tags
+                text = re.sub(r'<[^>]+>', ' ', resp.text)
+                text = re.sub(r'\s+', ' ', text).strip()
+                text = text[:1500]  # limit per page
+                all_text.append(f"[{url}]\n{text}")
+            except Exception:
+                continue
+        return "\n\n".join(all_text) if all_text else "PHF website unavailable"
+    except Exception as e:
+        return f"PHF website fetch error: {e}"
+
+    
 
 SYSTEM_PROMPT = (
     "You are ONE Health Bot, a friendly and helpful assistant for the One Health Dashboard of Bettahalasuru village, Karnataka.\n"
@@ -621,6 +647,12 @@ def build_prompt(user_question, history=None):
         for msg in history[-6:]:
             role = "User" if msg.get("role") == "user" else "Bot"
             history_text += f"{role}: {msg.get('text', '')}\n"
+    
+    phf_keywords = ["phf", "planetary", "foundation", "initiative", "iisc", 
+                 "one health knowledge", "equine", "project", "event",
+                 "bettahalasuru programme", "about", "who are you"]
+    needs_phf = any(kw in user_question.lower() for kw in phf_keywords)
+    phf_data = fetch_phf_website() if needs_phf else ""
 
     context = f"""
 {SYSTEM_PROMPT}
@@ -717,8 +749,9 @@ Surveillance Scores:
 Risk Indicators:
 {oh_risk}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{f"── PHF WEBSITE CONTENT ──{chr(10)}{phf_data}{chr(10)}" if phf_data else ""}
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ── CONVERSATION SO FAR ──
 {history_text}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
