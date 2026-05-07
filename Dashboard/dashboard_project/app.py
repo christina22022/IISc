@@ -1573,9 +1573,9 @@ def _build_surveillance_radar(d):
         font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
         margin=dict(l=20, r=20, t=60, b=80),
         title=dict(
-            text="One Health Surveillance Summary",
-            font=dict(size=14, color=TEXT, family="'Sora',sans-serif"),
-            x=0.02, xanchor="left",
+          text="One Health Surveillance Summary",
+          font=dict(size=11, color=TEXT, family="'Sora',sans-serif"),
+          x=0.5, xanchor="center",
         ),
         legend=dict(
             bgcolor="rgba(0,0,0,0)",
