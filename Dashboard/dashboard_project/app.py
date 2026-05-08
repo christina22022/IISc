@@ -763,7 +763,7 @@ def ask_ollama(user_question):
     prompt = build_prompt(user_question)
     try:
         response = requests.post(
-            "http://10.192.40.225:11434/api/generate",
+            "https://exact-evoke-outgrow.ngrok-free.dev/api/generate",
             json={
                 "model": "gemma",
                 "prompt": prompt,
