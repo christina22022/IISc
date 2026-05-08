@@ -373,14 +373,14 @@ SYSTEM_PROMPT = (
     "You are ONE Health Bot, a friendly and helpful assistant for the One Health Dashboard of Bettahalasuru village, Karnataka.\n"
     "You were built to help users understand health data about this village in a warm, conversational and informative way.\n"
     "STRICT RULES - follow these always:\n"
-"If anyone asks who built this dashboard or who developed it, answer: This dashboard was built by Martin Thomas, Alex Mathew , Tenna Tom, Jeswin Saji, Christina, Thoshitha V,and Vaishnavi Dubey.\n"    "1. NEVER share, mention, or hint at any Google Sheets links, spreadsheet URLs, or data source links.\n"
+    "1. NEVER share, mention, or hint at any Google Sheets links, spreadsheet URLs, or data source links.\n"
     "2. NEVER mention words like Google Sheets, spreadsheet, Excel, dataset, database, data source, sheet, csv, or any technical storage terms.\n"
     "3. If anyone asks for data sources, links, or where data comes from, respond with exactly: I am not able to provide that.\n"
     "4. NEVER use ** for bold or any markdown formatting like *, #, __, etc.\n"
     "5. When listing items always put each item on its own line starting with a number or dash. Never write a list as a single paragraph.\n"
     "6. Focus only on One Health topics: human health, animal health, environment, and their connections in Bettahalasuru.\n"
     "7. When user says hi, hello, hey or any greeting — respond in a friendly warm way and invite them to ask about the dashboard.\n"
-    " - NEVER start your reply with Hello or Hi if the conversation has already started.\n"
+      " - NEVER start your reply with Hello or Hi if the conversation has already started.\n"
     "8. NEVER add a second paragraph asking follow-up questions like 'Would you like to know more?' or 'I am here to help'. Give the answer and stop. One paragraph only.\n"
     "9. NEVER say things like 'I am so glad you are here' or 'lovely village' or any overly enthusiastic phrases. Be calm, helpful and direct.\n"
     "10. When user sends short positive words like ok, done, good, great, thanks, thank you, nice, cool, perfect — reply with a short warm acknowledgement like Sure, Glad to help, Anytime, Let me know. Nothing more.\n"
@@ -1573,9 +1573,9 @@ def _build_surveillance_radar(d):
         font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
         margin=dict(l=20, r=20, t=60, b=80),
         title=dict(
-            text="One Health Surveillance Summary",
-            font=dict(size=14, color=TEXT, family="'Sora',sans-serif"),
-            x=0.02, xanchor="left",
+          text="One Health Surveillance Summary",
+          font=dict(size=11, color=TEXT, family="'Sora',sans-serif"),
+          x=0.5, xanchor="center",
         ),
         legend=dict(
             bgcolor="rgba(0,0,0,0)",
@@ -2732,14 +2732,42 @@ def page_human(d):
     # ════════════════════════════════════════════════════════════════════
     insights = html.Div(disease_insight_rows) if disease_insight_rows else html.Div([])
 
+# ════════════════════════════════════════════════════════════════════
+    # ANTIBIOTIC CALIBRATION — relocated from Environment pillar
+    # ════════════════════════════════════════════════════════════════════
+    antibiotic_calibration = html.Div([
+        card_top_bar(C_BLUE),
+        html.Div(style={"height": "6px"}),
+        card_title("Antibiotic Calibration Dashboard — Doxycycline & Amoxicillin"),
+        dcc.RadioItems(
+            id="calib-toggle",
+            options=[
+                {"label": "  Overlay (both drugs)", "value": "overlay"},
+                {"label": "  Doxycycline only",     "value": "doxy"},
+                {"label": "  Amoxicillin only",     "value": "amox"},
+            ],
+            value="overlay",
+            inline=True,
+            inputStyle={"marginRight": "5px"},
+            labelStyle={
+                "marginRight": "24px", "cursor": "pointer",
+                "fontSize": "12px", "fontFamily": "'DM Mono',monospace",
+                "color": MUTED,
+            },
+            style={"marginBottom": "14px"},
+        ),
+        html.Div(id="calib-metrics", children=[]),
+        html.Div(id="calib-charts",  children=[]),
+    ], style={**CARD_STYLE, "marginBottom": "20px"})
+
     return html.Div([
         header,
         top_kpi_row,
         charts_row,
         burden_screening,
+        antibiotic_calibration,
         insights,
     ])
-
 
 def page_animal(d):
     """
@@ -3574,7 +3602,7 @@ def page_environment(d):
 
     wq_tds_col       = find_col(wq, ["TDS_ppm", "TDS", "tds"])
     wq_do_col        = find_col(wq, ["DO_mg_L", "DO", "do"])
-    wq_status_col    = find_col(wq, ["drinking_status", "drinkingStatus"])
+    # wq_status_col removed — scatter no longer uses drinkingStatus classification
     wq_turbidity_col = find_col(wq, ["turbidity_NTU", "turbidity"])
     wq_source_col    = find_col(wq, ["source_name", "sourceName", "source", "location"])
 
@@ -3656,41 +3684,76 @@ def page_environment(d):
             )
 
     # ═════════════════════════════════════════════════════════════════════════
-    # CHART 1 (RIGHT) — Dissolved Oxygen vs TDS scatter  ★ UI UPDATED ★
+    # CHART 1 (RIGHT) — Dissolved Oxygen vs TDS scatter
+    # Single trace, manually fixed colors ordered to match the screenshot:
+    #   blue (leftmost), greens (low-TDS cluster), brown (mid), reds (high-TDS).
+    # No dynamic logic, no status grouping, no legend.
     # ═════════════════════════════════════════════════════════════════════════
-    color_map = {
-        "Unfit":       "#ef4444",
-        "Treat First": "#f59e0b",
-        "Borderline":  "#a855f7",
-        "Agriculture": "#22c55e",
+
+    # Fixed color sequence — order matches data rows as they appear in wq_plot.
+    # Edit this list if your sample order changes.
+# Sample-ID-based color map — colors attach to the correct point
+    # regardless of dataframe sort order.
+    _SAMPLE_COLOR_MAP = {
+        "S10": "#0284c7",  # blue        — ~204 TDS  (Piggery Water)
+        "S9":  "#0284c7",  # blue        — ~378 TDS  (Poultry Farm Borewell)
+        "S5":  "#16a34a",  # green       ┐
+        "S6":  "#16a34a",  # green       ├ low-mid TDS cluster ~288–312
+        "S7":  "#16a34a",  # green       ┘
+        "S8":  "#16a34a",  # green       — ~297 TDS  (Central Lake)
+        "S4":  "#b45309",  # brown/amber — ~912 TDS  (Effluent Common Drain)
+        "S2":  "#dc2626",  # red         ┐
+        "S3":  "#dc2626",  # red         ├ high TDS group ~1120–1420
+        "S1":  "#dc2626",  # red         ┘
     }
 
     fig_wq = empty_fig("No water quality data available")
-    if all([wq_tds_col, wq_do_col, wq_status_col, wq_source_col]):
+    if all([wq_tds_col, wq_do_col, wq_source_col]):
         wq_plot = coerce_numeric(wq, [wq_tds_col, wq_do_col])
-        wq_plot = wq_plot.dropna(subset=[wq_tds_col, wq_do_col, wq_status_col, wq_source_col]).copy()
+        wq_plot = wq_plot.dropna(subset=[wq_tds_col, wq_do_col, wq_source_col]).copy()
         if not wq_plot.empty:
+            # Resolve the sampleId column (try common aliases)
+            sid_col = find_col(wq_plot, [
+                "sampleId", "sample_id", "Sample_ID", "id",
+                "sample_no", "Sample no.", "Sample no", "SampleID",
+            ])
+            if sid_col:
+                marker_colors = [
+                    _SAMPLE_COLOR_MAP.get(str(sid).strip(), "#6b7280")
+                    for sid in wq_plot[sid_col]
+                ]
+            else:
+                # Fallback: derive ID from row position if column not found
+                marker_colors = [
+                    _SAMPLE_COLOR_MAP.get(f"S{i+1}", "#6b7280")
+                    for i in range(len(wq_plot))
+                ]
+
             fig_wq = go.Figure()
-            for status_val, grp in wq_plot.groupby(wq_status_col):
-                dot_color = color_map.get(str(status_val).strip(), "#3b82f6")
-                fig_wq.add_trace(go.Scatter(
-                    x=grp[wq_tds_col],
-                    y=grp[wq_do_col],
-                    mode="markers",
-                    name=str(status_val),
-                    marker=dict(
-                        color=dot_color,
-                        size=12,
-                        opacity=0.90,
-                        line=dict(width=0),
-                    ),
-                    text=grp[wq_source_col].astype(str),
-                    hovertemplate="<b>%{text}</b><br>TDS: %{x} ppm<br>DO: %{y} mg/L<extra></extra>",
-                ))
+            fig_wq.add_trace(go.Scatter(
+                x=wq_plot[wq_tds_col],
+                y=wq_plot[wq_do_col],
+                mode="markers",
+                showlegend=False,
+                marker=dict(
+                    color=marker_colors,
+                    size=17,
+                    opacity=0.90,
+                    line=dict(color="white", width=1.5),
+                ),
+                text=wq_plot[wq_source_col].astype(str),
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "TDS: %{x} ppm<br>"
+                    "DO: %{y} mg/L"
+                    "<extra></extra>"
+                ),
+            ))
 
     fig_wq.update_layout(
         plot_bgcolor="#f5f7fa",
         paper_bgcolor="#f5f7fa",
+        showlegend=False,
         font=dict(family="Sora, sans-serif", size=12, color="#334155"),
         title=dict(
             text="Dissolved Oxygen vs TDS — All Sources",
@@ -3700,7 +3763,7 @@ def page_environment(d):
         ),
         xaxis_title="TDS (ppm)",
         yaxis_title="Dissolved Oxygen (mg/L)",
-        margin=dict(l=40, r=20, t=60, b=70),
+        margin=dict(l=40, r=20, t=60, b=50),
         xaxis=dict(
             showgrid=True,
             gridcolor="rgba(0,0,0,0.06)",
@@ -3716,10 +3779,6 @@ def page_environment(d):
             linecolor="rgba(0,0,0,0)",
             tickfont=dict(color="#64748b"),
             title_font=dict(color="#64748b"),
-        ),
-        legend=dict(
-            orientation="h", x=0, y=-0.22,
-            bgcolor="rgba(0,0,0,0)", font_size=11,
         ),
     )
 
@@ -3913,9 +3972,10 @@ def page_environment(d):
     # ═════════════════════════════════════════════════════════════════════════
     gram_pos_pct = max(0.0, 100.0 - gram_neg_pct)
 
-    
     # ═════════════════════════════════════════════════════════════════════════
-    # AQI — doughnut + gradient scale bar  ★ SPACING FIXED ★
+    # AQI — doughnut + gradient scale bar
+    # CHANGES 2 & 3: Fixed label congestion, improved vertical spacing between
+    #   scale bar / marker / labels, increased bottom margin.
     # ═════════════════════════════════════════════════════════════════════════
     aqi_headroom = max(0.0, 200.0 - aqi_val)
 
@@ -3948,13 +4008,13 @@ def page_environment(d):
         textinfo="none",
         hovertemplate="<b>%{label}</b><br>%{value}<extra></extra>",
         showlegend=False,
-        domain=dict(x=[0.15, 0.55], y=[0.28, 0.96]),
+        domain=dict(x=[0.15, 0.55], y=[0.30, 0.96]),  # ← raised donut slightly to free bottom space
     ))
 
     # ── AQI number — centred inside donut ─────────────────────────────────────
     fig_aqi_donut.add_annotation(
         text=f"<b>{int(aqi_val) if aqi_val else '—'}</b>",
-        x=0.35, y=0.67,
+        x=0.35, y=0.68,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -3962,7 +4022,7 @@ def page_environment(d):
     )
     fig_aqi_donut.add_annotation(
         text="AQI",
-        x=0.35, y=0.52,
+        x=0.35, y=0.53,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -3980,6 +4040,8 @@ def page_environment(d):
     )
 
     # ── Gradient scale bar segments ───────────────────────────────────────────
+    # CHANGE 3: Raised scale bar from y0=0.09/y1=0.17 → y0=0.13/y1=0.20
+    #           to give more vertical room for labels below and marker above.
     segments = [
         (0,   50,  "#22c55e"),
         (50,  100, "#a3e635"),
@@ -3994,25 +4056,40 @@ def page_environment(d):
         fig_aqi_donut.add_shape(
             type="rect",
             x0=x0, x1=x1,
-            y0=0.09, y1=0.17,
+            y0=0.13, y1=0.20,              # ← was 0.09/0.17; raised for more vertical breathing room
             xref="paper", yref="paper",
             fillcolor=seg_color,
             line=dict(width=0),
             opacity=0.90,
         )
 
-    # ── Scale bar labels ──────────────────────────────────────────────────────
-    for label_val, label_text in [
-        (0,   "0"),
-        (75,  "Good"),
-        (200, "Moderate"),
-        (225, "Unhealthy"),
-        (300, "300"),
+    # ── AQI marker triangle (above the scale bar) ─────────────────────────────
+    # CHANGE 3: Raised marker from y=0.20 → y=0.24 to sit clearly above the bar
+    fig_aqi_donut.add_annotation(
+        text=f"▲ {int(aqi_val) if aqi_val else '—'}",
+        x=marker_x,
+        y=0.24,                            # ← was 0.20; now clearly above scale bar
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(size=11, color=aqi_ring_color, family="'DM Mono',monospace"),
+        xanchor="center",
+    )
+
+    # ── Scale bar labels (below scale bar) ───────────────────────────────────
+    # CHANGE 2: Lowered labels to y=0.06 for clear gap from bar.
+    #           Shifted "Moderate" left and "Unhealthy" right to eliminate overlap.
+    #           "0" and "300" pushed to edges.
+    for label_val, label_text, x_anchor in [
+        (0,   "0",         "left"),
+        (75,  "Good",      "center"),
+        (175, "Moderate",  "center"),   # ← was 200; shifted left to avoid collision
+        (248, "Unhealthy", "center"),   # ← was 225; shifted right to avoid collision
+        (300, "300",       "right"),
     ]:
         fig_aqi_donut.add_annotation(
             text=label_text,
             x=label_val / 300.0,
-            y=0.05,
+            y=0.06,                        # ← was 0.05; extra gap below scale bar
             xref="paper", yref="paper",
             showarrow=False,
             font=dict(
@@ -4023,24 +4100,14 @@ def page_environment(d):
                       else MUTED,
                 family="'Sora',sans-serif",
             ),
-            xanchor="center",
+            xanchor=x_anchor,             # ← anchoring prevents edge clip on "0"/"300"
         )
 
-    # ── AQI marker triangle ───────────────────────────────────────────────────
-    fig_aqi_donut.add_annotation(
-        text=f"▲ {int(aqi_val) if aqi_val else '—'}",
-        x=marker_x,
-        y=0.20,
-        xref="paper", yref="paper",
-        showarrow=False,
-        font=dict(size=11, color=aqi_ring_color, family="'DM Mono',monospace"),
-        xanchor="center",
-    )
-
     # ── Layout ────────────────────────────────────────────────────────────────
+    # CHANGE 3: Increased bottom margin from b=60 → b=80 for comfortable padding.
     _aqi_layout = PLna("Air Quality & Atmospheric Conditions")
     _aqi_layout["height"]  = 420
-    _aqi_layout["margin"]  = dict(l=30, r=30, t=90, b=60)
+    _aqi_layout["margin"]  = dict(l=30, r=30, t=90, b=80)  # ← was b=60
     fig_aqi_donut.update_layout(**_aqi_layout)
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -4140,31 +4207,6 @@ def page_environment(d):
 
             chart_card(dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False}), "amber"),
         ]),
-
-        html.Div([
-            card_top_bar(C_BLUE),
-            html.Div(style={"height": "6px"}),
-            card_title("Antibiotic Calibration Dashboard — Doxycycline & Amoxicillin"),
-            dcc.RadioItems(
-                id="calib-toggle",
-                options=[
-                    {"label": "  Overlay (both drugs)", "value": "overlay"},
-                    {"label": "  Doxycycline only",     "value": "doxy"},
-                    {"label": "  Amoxicillin only",     "value": "amox"},
-                ],
-                value="overlay",
-                inline=True,
-                inputStyle={"marginRight": "5px"},
-                labelStyle={
-                    "marginRight": "24px", "cursor": "pointer",
-                    "fontSize": "12px", "fontFamily": "'DM Mono',monospace",
-                    "color": MUTED,
-                },
-                style={"marginBottom": "14px"},
-            ),
-            html.Div(id="calib-metrics", children=[]),
-            html.Div(id="calib-charts",  children=[]),
-        ], style={**CARD_STYLE, "marginBottom": "20px"}),
 
         html.Div([
             card_top_bar(C_BLUE),
