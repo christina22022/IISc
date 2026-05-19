@@ -225,6 +225,7 @@ threading.Thread(target=_warm_cache, daemon=True).start()
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "One Health Dashboard — Bettahalasuru"
+server = app.server
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GOOGLE SHEETS CONFIG
@@ -1177,7 +1178,7 @@ def card_top_bar(color):
 
 def section_banner(title, subtitle):
     return html.Div([
-        html.H2(title, style={
+        html.H2(title, className="oh-banner-h2", style={
             "fontFamily": "'Playfair Display',serif",
             "fontSize": "32px", "fontWeight": "700",
             "margin": "0 0 4px", "color": TEXT,
@@ -1185,7 +1186,8 @@ def section_banner(title, subtitle):
         html.P(subtitle, style={
             "fontFamily": "'DM Mono',monospace",
             "fontSize": "11px", "color": MUTED,
-            "letterSpacing": "0.5px", "fontWeight": "600", "margin": "0 0 28px",
+            "letterSpacing": "0.5px", "fontWeight": "600",
+            "margin": "0 0 28px", "wordBreak": "break-word",
         }),
     ])
 
@@ -1236,7 +1238,7 @@ def kpi_card(label, value, unit, sub, accent_color="blue"):
 
 
 def kpi_row(children):
-    return html.Div(children, style={
+    return html.Div(children, className="oh-kpi-row", style={
         "display": "grid",
         "gridTemplateColumns": f"repeat({len(children)}, 1fr)",
         "gap": "12px", "marginBottom": "20px",
@@ -1257,21 +1259,21 @@ def chart_card(child, accent="blue", span=1):
 
 
 def grid2(children):
-    return html.Div(children, style={
+    return html.Div(children, className="oh-grid2", style={
         "display": "grid", "gridTemplateColumns": "1fr 1fr",
         "gap": "20px", "marginBottom": "24px",
     })
 
 
 def grid3(children):
-    return html.Div(children, style={
+    return html.Div(children, className="oh-grid3", style={
         "display": "grid", "gridTemplateColumns": "repeat(3,1fr)",
         "gap": "16px", "marginBottom": "24px",
     })
 
 
 def grid4(children):
-    return html.Div(children, style={
+    return html.Div(children, className="oh-grid4", style={
         "display": "grid", "gridTemplateColumns": "repeat(4,1fr)",
         "gap": "16px", "marginBottom": "20px",
     })
@@ -1332,7 +1334,7 @@ def data_table_wrap(header_cols, rows):
         html.Div(c, style={
             "flex": str(f), "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
             "fontWeight": "700", "color": TEXT, "letterSpacing": "0.8px",
-            "textTransform": "uppercase", "padding": "0 8px",
+            "textTransform": "uppercase", "padding": "0 8px", "whiteSpace": "nowrap",
         }) for c, f in header_cols
     ], style={
         "display": "flex", "padding": "8px 12px",
@@ -1345,15 +1347,19 @@ def data_table_wrap(header_cols, rows):
             html.Div(cell, style={
                 "flex": str(f), "fontSize": "12px", "color": MUTED,
                 "padding": "0 8px", "display": "flex", "alignItems": "center",
+                "whiteSpace": "nowrap",
             }) for cell, f in row
         ], style={
             "display": "flex", "alignItems": "center", "padding": "9px 12px",
             "borderBottom": f"1px solid rgba(0,0,0,0.06)",
         }))
 
-    return html.Div([header] + body_rows, style={
+    inner = html.Div([header] + body_rows, style={
         "background": DEEP, "border": f"1px solid {BORDER}",
         "borderRadius": "10px", "overflow": "hidden", "marginBottom": "20px",
+    })
+    return html.Div(inner, className="oh-table-scroll", style={
+        "overflowX": "auto", "width": "100%", "WebkitOverflowScrolling": "touch",
     })
 
 
@@ -1950,7 +1956,7 @@ def page_overview(d):
             ),
         ], style=CARD_STYLE),
 
-    ], style={
+    ], className="oh-kpi-5col", style={
         "display": "grid",
         "gridTemplateColumns": "repeat(5, 1fr)",
         "gap": "12px",
@@ -2002,7 +2008,7 @@ def page_overview(d):
             }),
         ], style=CARD_STYLE),
 
-    ], style={
+    ], className="oh-kpi-3col", style={
         "display": "grid",
         "gridTemplateColumns": "repeat(3, 1fr)",
         "gap": "16px",
@@ -2085,6 +2091,7 @@ def page_overview(d):
                 dcc.Graph(
                     figure=fig_risk,
                     config={"displayModeBar": False},
+                    responsive=True,
                     style={"height": "320px"},
                 ),
             ], style={
@@ -2110,7 +2117,7 @@ def page_overview(d):
 
         ], style=CARD_STYLE),
 
-    ], style={
+    ], className="oh-radar", style={
         "display": "grid",
         "gridTemplateColumns": "1fr 1fr",
         "gap": "20px",
@@ -2668,6 +2675,7 @@ def page_human(d):
     # ════════════════════════════════════════════════════════════════════
     top_kpi_row = html.Div(
         [population_card, phc_services_card, vector_cluster_card],
+        className="oh-top-kpi",
         style={
             "display": "flex",
             "gap": "20px",
@@ -2682,11 +2690,13 @@ def page_human(d):
     charts_row = grid2([
         chart_card(
             html.Div([dcc.Graph(figure=fig_dis, config={"displayModeBar": False},
+                                responsive=True,
                                 style={"height": "360px"})]),
             "blue",
         ),
         chart_card(
             html.Div([dcc.Graph(figure=fig_vec, config={"displayModeBar": False},
+                                responsive=True,
                                 style={"height": "360px"})]),
             "green",
         ),
@@ -3250,7 +3260,7 @@ def page_animal(d):
                 html.P("Via vet health department",
                        style={"fontSize": "11px", "color": MUTED, "margin": "0"}),
             ], style=CARD_STYLE),
-        ], style={
+        ], className="oh-grid4", style={
             "display": "grid",
             "gridTemplateColumns": "repeat(4, 1fr)",
             "gap": "12px",
@@ -3309,6 +3319,7 @@ def page_animal(d):
                 dcc.Graph(
                     figure=fig_rab,
                     config={"displayModeBar": False},
+                    responsive=True,
                     style={"height": "280px"},
                 ),
             ], style=CARD_STYLE),
@@ -3355,6 +3366,7 @@ def page_animal(d):
                 dcc.Graph(
                     figure=fig_amr,
                     config={"displayModeBar": False},
+                    responsive=True,
                     style={"height": "280px"},
                 ),
             ], style=CARD_STYLE),
@@ -3410,7 +3422,7 @@ def _build_calib_content(drug_filter):
         empty.add_annotation(text="No calibration data available", x=0.5, y=0.5,
                              xref="paper", yref="paper", showarrow=False, font=dict(size=14))
         empty.update_layout(**PL("Calibration"))
-        empty_card = chart_card(dcc.Graph(figure=empty, config={"displayModeBar": False}), "blue", span=2)
+        empty_card = chart_card(dcc.Graph(figure=empty, config={"displayModeBar": False}, responsive=True), "blue", span=2)
         return html.Div([empty_card]), html.Div()
 
     combined = pd.concat(frames, ignore_index=True)
@@ -3529,8 +3541,8 @@ def _build_calib_content(drug_filter):
     fig_accuracy.update_xaxes(tickangle=-30)
 
     charts_div = grid2([
-        chart_card(dcc.Graph(figure=fig_curve,    config={"displayModeBar": False}), "blue"),
-        chart_card(dcc.Graph(figure=fig_accuracy, config={"displayModeBar": False}), "green"),
+        chart_card(dcc.Graph(figure=fig_curve,    config={"displayModeBar": False}, responsive=True), "blue"),
+        chart_card(dcc.Graph(figure=fig_accuracy, config={"displayModeBar": False}, responsive=True), "green"),
     ])
 
     mc = []
@@ -4009,13 +4021,13 @@ def page_environment(d):
         textinfo="none",
         hovertemplate="<b>%{label}</b><br>%{value}<extra></extra>",
         showlegend=False,
-        domain=dict(x=[0.15, 0.55], y=[0.30, 0.96]),  # ← raised donut slightly to free bottom space
+        domain=dict(x=[0.10, 0.60], y=[0.40, 0.99]),  # ← raised donut slightly to free bottom space
     ))
 
     # ── AQI number — centred inside donut ─────────────────────────────────────
     fig_aqi_donut.add_annotation(
         text=f"<b>{int(aqi_val) if aqi_val else '—'}</b>",
-        x=0.35, y=0.68,
+        x=0.35, y=0.73,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -4023,7 +4035,7 @@ def page_environment(d):
     )
     fig_aqi_donut.add_annotation(
         text="AQI",
-        x=0.35, y=0.53,
+        x=0.35, y=0.58,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -4057,7 +4069,7 @@ def page_environment(d):
         fig_aqi_donut.add_shape(
             type="rect",
             x0=x0, x1=x1,
-            y0=0.13, y1=0.20,              # ← was 0.09/0.17; raised for more vertical breathing room
+            y0=0.16, y1=0.24,              
             xref="paper", yref="paper",
             fillcolor=seg_color,
             line=dict(width=0),
@@ -4069,7 +4081,7 @@ def page_environment(d):
     fig_aqi_donut.add_annotation(
         text=f"▲ {int(aqi_val) if aqi_val else '—'}",
         x=marker_x,
-        y=0.24,                            # ← was 0.20; now clearly above scale bar
+        y=0.29,                            
         xref="paper", yref="paper",
         showarrow=False,
         font=dict(size=11, color=aqi_ring_color, family="'DM Mono',monospace"),
@@ -4090,7 +4102,7 @@ def page_environment(d):
         fig_aqi_donut.add_annotation(
             text=label_text,
             x=label_val / 300.0,
-            y=0.06,                        # ← was 0.05; extra gap below scale bar
+            y=0.09,                        
             xref="paper", yref="paper",
             showarrow=False,
             font=dict(
@@ -4107,8 +4119,8 @@ def page_environment(d):
     # ── Layout ────────────────────────────────────────────────────────────────
     # CHANGE 3: Increased bottom margin from b=60 → b=80 for comfortable padding.
     _aqi_layout = PLna("Air Quality & Atmospheric Conditions")
-    _aqi_layout["height"]  = 420
-    _aqi_layout["margin"]  = dict(l=30, r=30, t=90, b=80)  # ← was b=60
+    _aqi_layout["height"]  = 580
+    _aqi_layout["margin"]  = dict(l=20, r=20, t=80, b=130)  
     fig_aqi_donut.update_layout(**_aqi_layout)
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -4127,8 +4139,8 @@ def page_environment(d):
         ]),
 
         grid2([
-            chart_card(dcc.Graph(figure=fig_tds_bar, config={"displayModeBar": False}), "amber"),
-            chart_card(dcc.Graph(figure=fig_wq,      config={"displayModeBar": False}), "blue"),
+            chart_card(dcc.Graph(figure=fig_tds_bar, config={"displayModeBar": False}, responsive=True), "amber"),
+            chart_card(dcc.Graph(figure=fig_wq,      config={"displayModeBar": False}, responsive=True), "blue"),
         ]),
 
         html.Div([
@@ -4161,7 +4173,7 @@ def page_environment(d):
                 ),
             ], style=CARD_STYLE),
 
-            chart_card(dcc.Graph(figure=fig_soil, config={"displayModeBar": False}), "amber"),
+            chart_card(dcc.Graph(figure=fig_soil, config={"displayModeBar": False}, responsive=True), "amber"),
         ]),
 
         grid2([
@@ -4206,7 +4218,7 @@ def page_environment(d):
                 }),
             ], style=CARD_STYLE),
 
-            chart_card(dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False}), "amber"),
+            chart_card(dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False}, responsive=True), "amber"),
         ]),
 
         html.Div([
@@ -5021,6 +5033,7 @@ def page_interconnections(d):
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
                 dcc.Graph(figure=fig_bub, config={"displayModeBar": False},
+                          responsive=True,
                           style={"height": "300px"}),
             ], style=CARD_STYLE),
 
@@ -5032,6 +5045,7 @@ def page_interconnections(d):
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
                 dcc.Graph(figure=fig_rain, config={"displayModeBar": False},
+                          responsive=True,
                           style={"height": "260px"}),
             ], style=CARD_STYLE),
         ]),
@@ -5046,6 +5060,7 @@ def page_interconnections(d):
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
                 dcc.Graph(figure=fig_zoo, config={"displayModeBar": False},
+                          responsive=True,
                           style={"height": "260px"}),
             ], style=CARD_STYLE),
 
@@ -5066,6 +5081,7 @@ def page_interconnections(d):
                     html.Span("\ud83d\udd35 Managed",                style={"fontSize":"9px","padding":"2px 7px","borderRadius":"4px","background":"rgba(79,195,247,0.15)","color":"#0284c7","fontFamily":"'DM Mono',monospace"}),
                 ], style={"display":"flex","flexWrap":"wrap","gap":"4px","marginBottom":"8px"}),
                 dcc.Graph(figure=fig_polar, config={"displayModeBar": False},
+                          responsive=True,
                           style={"height": "260px"}),
                 html.Div(
                     "\u26a0 Critical: Water TDS (Human\u2192Env), Soil E. coli (Animal\u2192Env), "
@@ -5091,6 +5107,7 @@ def page_interconnections(d):
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
                 dcc.Graph(figure=fig_int, config={"displayModeBar": False},
+                          responsive=True,
                           style={"height": "260px"}),
             ], style=CARD_STYLE),
 
@@ -5102,6 +5119,7 @@ def page_interconnections(d):
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
                 dcc.Graph(figure=fig_proj, config={"displayModeBar": False},
+                          responsive=True,
                           style={"height": "260px"}),
             ], style=CARD_STYLE),
         ]),
@@ -5134,16 +5152,158 @@ app.index_string = """<!DOCTYPE html>
 <html>
 <head>
 {%metas%}
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>{%title%}</title>
 {%favicon%}
 {%css%}
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&family=DM+Mono:wght@300;400;500&family=Playfair+Display:ital,wght@0,700;1,400&display=swap" rel="stylesheet">
 <style>
+  /* ── BASE ─────────────────────────────────────────── */
   * { box-sizing: border-box; }
-  body { margin: 0; background: #ffffff; font-family: 'Sora', sans-serif; }
+  html, body { margin: 0; overflow-x: hidden; max-width: 100%; background: #ffffff; font-family: 'Sora', sans-serif; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: #f1f5f9; }
   ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 4px; }
+
+  /* ── HEADER
+     !important is required — Dash renders style= as inline HTML attributes
+     which beat class-based CSS unless !important is used                    */
+  .oh-header       { display: flex !important; flex-wrap: wrap !important; justify-content: space-between !important; align-items: center !important; gap: 10px !important; }
+  .oh-header-right { display: flex !important; align-items: center !important; flex-wrap: wrap !important; gap: 12px !important; }
+  .oh-header-title { font-size: 22px !important; white-space: nowrap; }
+  .oh-header-sub   { font-size: 10px !important; }
+
+  /* ── TABS: inner div must scroll, tabs must not wrap ── */
+  .oh-tabs-bar > div           { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; scrollbar-width: none !important; flex-wrap: nowrap !important; }
+  .oh-tabs-bar > div::-webkit-scrollbar { display: none !important; }
+  .oh-tabs-bar > div > div     { white-space: nowrap !important; flex-shrink: 0 !important; }
+
+  /* ── PAGE CONTENT ── */
+  .oh-page { max-width: 100% !important; }
+
+  /* ── GRID HELPERS — !important beats all inline grid styles ── */
+  .oh-grid2   { display: grid !important; grid-template-columns: 1fr 1fr !important;      gap: 20px !important; margin-bottom: 24px !important; }
+  .oh-grid3   { display: grid !important; grid-template-columns: repeat(3,1fr) !important; gap: 16px !important; margin-bottom: 24px !important; }
+  .oh-grid4   { display: grid !important; grid-template-columns: repeat(4,1fr) !important; gap: 16px !important; margin-bottom: 20px !important; }
+  .oh-kpi-row { display: grid !important; gap: 12px !important; margin-bottom: 20px !important; }
+  .oh-kpi-5col{ display: grid !important; grid-template-columns: repeat(5,1fr) !important; gap: 12px !important; margin-bottom: 16px !important; }
+  .oh-kpi-3col{ display: grid !important; grid-template-columns: repeat(3,1fr) !important; gap: 16px !important; margin-bottom: 20px !important; }
+  .oh-radar   { display: grid !important; grid-template-columns: 1fr 1fr !important;      gap: 20px !important; margin-bottom: 24px !important; }
+
+  /* ── BANNER TITLE ── */
+  .oh-banner-h2 { font-size: 32px !important; word-break: break-word !important; }
+
+  /* ── TOP KPI ROW (flex, not grid) — wraps on narrow screens ── */
+  .oh-top-kpi { display: flex !important; flex-wrap: wrap !important; gap: 20px !important; margin-bottom: 28px !important; align-items: stretch !important; }
+  .oh-top-kpi > div { min-width: 160px !important; }
+
+  /* ── DATA TABLES scroll horizontally on mobile ── */
+  .oh-table-scroll             { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; width: 100% !important; }
+  .oh-table-scroll > div       { min-width: 520px !important; }
+
+  /* ── PLOTLY graphs fill container ── */
+  .js-plotly-plot, .plotly, .plot-container { width: 100% !important; }
+  .dash-graph { width: 100% !important; min-width: 0 !important; }
+
+  /* ══ TABLET  ≤ 1100px ═══════════════════════════════ */
+  @media (max-width: 1100px) {
+    .oh-header       { padding: 12px 20px !important; }
+    .oh-page         { padding: 24px 20px 40px !important; }
+    .oh-tabs-bar > div { padding: 0 20px !important; }
+    .oh-grid4        { grid-template-columns: repeat(2,1fr) !important; }
+    .oh-kpi-5col     { grid-template-columns: repeat(3,1fr) !important; }
+    .oh-banner-h2    { font-size: 26px !important; }
+  }
+
+  /* ══ SMALL DESKTOP / LARGE TABLET  ≤ 900px ═════════ */
+  @media (max-width: 900px) {
+    .oh-header       { padding: 10px 14px !important; gap: 8px !important; }
+    .oh-header-title { font-size: 18px !important; }
+    .oh-header-sub   { display: none !important; }
+    .oh-header-right { gap: 6px !important; }
+    .oh-tabs-bar > div { padding: 0 12px !important; }
+    .oh-page         { padding: 18px 14px 36px !important; }
+    .oh-grid2        { grid-template-columns: 1fr !important; gap: 14px !important; }
+    .oh-grid3        { grid-template-columns: repeat(2,1fr) !important; }
+    .oh-grid4        { grid-template-columns: repeat(2,1fr) !important; }
+    .oh-kpi-5col     { grid-template-columns: repeat(3,1fr) !important; }
+    .oh-kpi-3col     { grid-template-columns: repeat(2,1fr) !important; }
+    .oh-radar        { grid-template-columns: 1fr !important; }
+    .oh-banner-h2    { font-size: 22px !important; }
+    .oh-pill-loc     { display: none !important; }
+    .oh-top-kpi > div { flex: 1 1 45% !important; }
+  }
+  /* ══ MOBILE PILLAR NAV STRIP ═══════════════════════ */
+  .oh-mobile-nav { display: none !important; }
+  @media (max-width: 900px) {
+    .oh-mobile-nav {
+      display: flex !important; overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch !important; scrollbar-width: none !important;
+      gap: 8px !important; padding: 10px 14px !important;
+      background: rgba(255,255,255,0.97) !important;
+      border-bottom: 1px solid rgba(0,0,0,0.08) !important;
+      position: sticky !important; top: 57px !important; z-index: 195 !important;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05) !important;
+      flex-wrap: nowrap !important; align-items: center !important;
+    }
+    .oh-mobile-nav::-webkit-scrollbar { display: none !important; }
+    .oh-mobile-nav-btn {
+      flex-shrink: 0 !important; padding: 7px 16px !important;
+      border-radius: 20px !important; border: 1.5px solid rgba(0,0,0,0.12) !important;
+      background: #f8fafc !important; font-family: 'DM Mono', monospace !important;
+      font-size: 11px !important; font-weight: 600 !important;
+      color: #334155 !important; cursor: pointer !important;
+      white-space: nowrap !important; transition: all 0.18s !important;
+      outline: none !important; letter-spacing: 0.3px !important;
+    }
+    .oh-mobile-nav-btn-active {
+      background: #0284c7 !important; color: #ffffff !important;
+      border-color: #0284c7 !important;
+      box-shadow: 0 2px 8px rgba(2,132,199,0.35) !important;
+    }
+    .oh-tabs-bar { display: none !important; }
+  }
+
+  /* ══ MOBILE  ≤ 768px ════════════════════════════════ */
+  @media (max-width: 768px) {
+    .oh-header       { padding: 8px 10px !important; }
+    .oh-header-title { font-size: 15px !important; }
+    .oh-header-right { gap: 4px !important; }
+    .oh-tabs-bar > div { padding: 0 6px !important; }
+    .oh-page         { padding: 12px 8px 28px !important; }
+    .oh-grid2        { grid-template-columns: 1fr !important; gap: 12px !important; }
+    .oh-grid3        { grid-template-columns: 1fr !important; }
+    .oh-grid4        { grid-template-columns: repeat(2,1fr) !important; gap: 10px !important; }
+    .oh-kpi-row      { grid-template-columns: repeat(2,1fr) !important; }
+    .oh-kpi-5col     { grid-template-columns: repeat(2,1fr) !important; }
+    .oh-kpi-3col     { grid-template-columns: 1fr !important; }
+    .oh-radar        { grid-template-columns: 1fr !important; }
+    .oh-banner-h2    { font-size: 20px !important; }
+    .oh-pill-loc     { display: none !important; }
+    .oh-pill-refresh { display: none !important; }
+    .oh-top-kpi > div { flex: 1 1 100% !important; }
+  }
+
+  /* ══ SMALL PHONE  ≤ 480px ═══════════════════════════ */
+  @media (max-width: 480px) {
+    .oh-header-title { font-size: 13px !important; }
+    .oh-grid4        { grid-template-columns: 1fr 1fr !important; }
+    .oh-kpi-5col     { grid-template-columns: 1fr 1fr !important; }
+    .oh-kpi-row      { grid-template-columns: 1fr 1fr !important; }
+    .oh-banner-h2    { font-size: 18px !important; }
+    .oh-logo         { width: 34px !important; height: 34px !important; font-size: 16px !important; }
+  }
+
+  /* ── Chat panel mobile ── */
+  @media (max-width: 768px) {
+    #chat-panel[style*="display: block"] {
+      width: calc(100vw - 16px) !important;
+      right: 8px !important;
+      bottom: 80px !important;
+      height: 72vh !important;
+      max-height: 520px !important;
+    }
+  }
 </style>
 </head>
 <body>
@@ -5174,7 +5334,7 @@ app.layout = html.Div([
 
     html.Header([
         html.Div([
-            html.Div("🌍", style={
+            html.Div("🌍", className="oh-logo", style={
                 "width": "48px", "height": "48px", "borderRadius": "12px",
                 "background": "linear-gradient(135deg,#4fc3f7 0%,#69f0ae 100%)",
                 "display": "flex", "alignItems": "center", "justifyContent": "center",
@@ -5182,27 +5342,28 @@ app.layout = html.Div([
                 "flexShrink": "0",
             }),
             html.Div([
-                html.H1("One Health Village", style={
+                html.H1("One Health Village", className="oh-header-title", style={
                     "fontFamily": "'Sora',sans-serif",
                     "fontSize": "22px", "fontWeight": "700",
-                    "margin": "0", "color": TEXT,
-                    "letterSpacing": "-0.3px",
+                    "margin": "0", "color": TEXT, "letterSpacing": "-0.3px",
                 }),
-                html.P("BETTAHALASURU · KARNATAKA · PLANETARY HEALTH FOUNDATION", style={
+                html.P("BETTAHALASURU · KARNATAKA · PLANETARY HEALTH FOUNDATION",
+                       className="oh-header-sub", style={
                     "fontFamily": "'DM Mono',monospace",
                     "fontSize": "10px", "color": MUTED,
-                    "letterSpacing": "0.5px", "fontWeight": "600",
-                    "margin": "2px 0 0",
+                    "letterSpacing": "0.5px", "fontWeight": "600", "margin": "2px 0 0",
                 }),
             ]),
         ], style={"display": "flex", "alignItems": "center", "gap": "14px"}),
 
         html.Div([
-            html.Div([html.Span("📍 "), "Bangalore Rural, KA"], style={
+            html.Div([html.Span("📍 "), "Bangalore Rural, KA"],
+                     className="oh-pill-loc", style={
                 "padding": "5px 12px", "borderRadius": "20px",
                 "background": "rgba(0,0,0,0.06)", "border": f"1px solid {BORDER}",
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
+                "whiteSpace": "nowrap",
             }),
             html.Div(id="header-population", children=[
                 "Population ", html.Span(_INIT_POP, style={"color": C_BLUE, "fontWeight": "600"}),
@@ -5211,6 +5372,7 @@ app.layout = html.Div([
                 "background": "rgba(0,0,0,0.06)", "border": f"1px solid {BORDER}",
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
+                "whiteSpace": "nowrap",
             }),
             html.Div(id="header-aqi", children=[
                 "AQI ", html.Span(_INIT_AQI, style={"color": C_AMBER, "fontWeight": "600"}),
@@ -5219,6 +5381,7 @@ app.layout = html.Div([
                 "background": "rgba(0,0,0,0.06)", "border": f"1px solid {BORDER}",
                 "fontSize": "11px", "fontFamily": "'DM Mono',monospace", "color": MUTED,
                 "display": "flex", "alignItems": "center", "gap": "4px",
+                "whiteSpace": "nowrap",
             }),
             html.Div([
                 html.Div(id="last-update-display", style={"fontSize": "11px", "color": MUTED}),
@@ -5226,12 +5389,13 @@ app.layout = html.Div([
                     "background": "rgba(0,0,0,0.06)", "border": f"1px solid {C_GREEN}",
                     "color": C_GREEN, "borderRadius": "20px", "padding": "5px 14px",
                     "fontSize": "11px", "cursor": "pointer", "fontFamily": "'DM Mono',monospace",
-                    "fontWeight": "600", "marginLeft": "8px",
+                    "fontWeight": "600", "marginLeft": "8px", "whiteSpace": "nowrap",
                 }),
-            ], style={"display": "flex", "alignItems": "center"}),
-        ], style={"display": "flex", "alignItems": "center", "gap": "12px"}),
+            ], className="oh-pill-refresh", style={"display": "flex", "alignItems": "center"}),
+        ], className="oh-header-right", style={"display": "flex", "alignItems": "center", "gap": "12px"}),
+        
 
-    ], style={
+    ], className="oh-header", style={
         "display": "flex", "justifyContent": "space-between", "alignItems": "center",
         "padding": "16px 40px",
         "borderBottom": f"1px solid {BORDER}",
@@ -5242,24 +5406,46 @@ app.layout = html.Div([
         "fontFamily": "'Sora',sans-serif",
     }),
 
+    html.Div(
+        id="mobile-nav-strip",
+        className="oh-mobile-nav",
+        children=[
+            html.Button(
+                label,
+                id=f"mob-tab-{val}",
+                n_clicks=0,
+                className=(
+                    "oh-mobile-nav-btn oh-mobile-nav-btn-active"
+                    if val == "overview"
+                    else "oh-mobile-nav-btn"
+                ),
+            )
+            for val, label in TAB_CFG
+        ],
+    ),
+    
+
     dcc.Tabs(
         id="main-tabs", value="overview",
+        className="oh-tabs-bar",
         children=[
             dcc.Tab(
                 label=label, value=val,
                 style={
-                    "padding": "12px 20px", "fontSize": "11px", "fontWeight": "600",
+                    "padding": "12px 16px", "fontSize": "11px", "fontWeight": "600",
                     "letterSpacing": "0.5px", "textTransform": "uppercase",
                     "fontFamily": "'DM Mono',monospace",
                     "color": "#334155", "background": "transparent",
-                    "borderBottom": "2px solid transparent", "border": "none", "borderRadius": "0",
+                    "borderBottom": "2px solid transparent", "border": "none",
+                    "borderRadius": "0", "whiteSpace": "nowrap",
                 },
                 selected_style={
-                    "padding": "12px 20px", "fontSize": "11px", "fontWeight": "600",
+                    "padding": "12px 16px", "fontSize": "11px", "fontWeight": "600",
                     "letterSpacing": "0.5px", "textTransform": "uppercase",
                     "fontFamily": "'DM Mono',monospace",
                     "color": C_BLUE, "background": "transparent",
-                    "borderBottom": f"2px solid {C_BLUE}", "border": "none", "borderRadius": "0",
+                    "borderBottom": f"2px solid {C_BLUE}", "border": "none",
+                    "borderRadius": "0", "whiteSpace": "nowrap",
                 },
             )
             for val, label in TAB_CFG
@@ -5271,10 +5457,11 @@ app.layout = html.Div([
             "padding": "0 40px",
             "position": "sticky", "top": "73px", "zIndex": "200",
             "boxShadow": "0 1px 4px rgba(0,0,0,0.04)",
+            "overflowX": "auto",
         },
     ),
 
-    html.Div(id="page-content", style={
+    html.Div(id="page-content", className="oh-page", style={
         "padding": "36px 40px 60px",
         "maxWidth": "1440px", "margin": "0 auto",
         "fontFamily": "'Sora',sans-serif",
@@ -5729,6 +5916,37 @@ def update_calibration(drug_filter):
     charts_div, metrics_div = _build_calib_content(drug_filter)
     return charts_div, metrics_div
 
+
+app.clientside_callback(
+    """
+    function() {
+        var tabs = ["overview","human","animal","environment","interconnections"];
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx || !ctx.triggered || ctx.triggered.length === 0)
+            return window.dash_clientside.no_update;
+        var triggered = ctx.triggered[0].prop_id;
+        for (var i = 0; i < tabs.length; i++) {
+            if (triggered === "mob-tab-" + tabs[i] + ".n_clicks") {
+                var at = tabs[i];
+                setTimeout(function(a) {
+                    tabs.forEach(function(t) {
+                        var b = document.getElementById("mob-tab-" + t);
+                        if (!b) return;
+                        b.className = b.className.replace(/ oh-mobile-nav-btn-active/g,"").trim();
+                        if (t === a) b.className += " oh-mobile-nav-btn-active";
+                    });
+                }, 20, at);
+                return at;
+            }
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("main-tabs", "value", allow_duplicate=True),
+    [Input(f"mob-tab-{val}", "n_clicks") for val, _ in TAB_CFG],
+    State("main-tabs", "value"),
+    prevent_initial_call=True,
+)
 
 if __name__ == "__main__":
     app.run(debug=True)
