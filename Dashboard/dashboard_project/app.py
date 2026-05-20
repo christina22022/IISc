@@ -2518,9 +2518,10 @@ def page_human(d):
                 "paddingLeft": "12px", "paddingRight": "12px",
             }),
         ], style={
-            "flex": "1 1 45%",      # 2 per row on mobile, 4 across on desktop
-            "minWidth": "120px",
+            "flex": "1",
+            "minWidth": "0",
             "borderRight": f"1px solid {BORDER}" if not is_last else "none",
+            
         })
 
     vector_mini_cards = [
@@ -2660,14 +2661,7 @@ def page_human(d):
         # 4 KPI blocks
         html.Div(
             vector_mini_cards,
-            style={
-                "display": "flex",
-                "alignItems": "flex-start",
-                "flexWrap": "wrap",   # cards wrap to 2×2 on narrow screens
-                "overflowX": "auto",
-                "WebkitOverflowScrolling": "touch",
-            
-            },
+            style={"display": "flex", "alignItems": "flex-start"},
         ),
     ], style={
         **CARD_STYLE,
@@ -5380,9 +5374,7 @@ app.index_string = """<!DOCTYPE html>
     .oh-pill-loc     { display: none !important; }
     .oh-pill-refresh { display: none !important; }
     .oh-top-kpi > div { flex: 1 1 100% !important; }
-    .oh-calib-metrics {
-        grid-template-columns: repeat(2, 1fr) !important;
-    }
+    
   }
 
   /* ══ SMALL PHONE  ≤ 480px ═══════════════════════════ */
