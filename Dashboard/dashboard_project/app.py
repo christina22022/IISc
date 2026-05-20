@@ -2518,8 +2518,8 @@ def page_human(d):
                 "paddingLeft": "12px", "paddingRight": "12px",
             }),
         ], style={
-            "flex": "1",
-            "minWidth": "0",
+            "flex": "1 1 45%",      # 2 per row on mobile, 4 across on desktop
+            "minWidth": "120px",
             "borderRight": f"1px solid {BORDER}" if not is_last else "none",
         })
 
@@ -2660,7 +2660,14 @@ def page_human(d):
         # 4 KPI blocks
         html.Div(
             vector_mini_cards,
-            style={"display": "flex", "alignItems": "flex-start"},
+            style={
+                "display": "flex",
+                "alignItems": "flex-start",
+                "flexWrap": "wrap",   # cards wrap to 2×2 on narrow screens
+                "overflowX": "auto",
+                "WebkitOverflowScrolling": "touch",
+            
+            },
         ),
     ], style={
         **CARD_STYLE,
@@ -3560,8 +3567,13 @@ def _build_calib_content(drug_filter):
     n_cols   = max(n_cols, 1)
     metrics_div = html.Div(mc, style={
         "display": "grid",
-        "gridTemplateColumns": f"repeat({n_cols}, 1fr)",
-        "gap": "12px", "marginBottom": "20px",
+        # On desktop: n_cols columns. CSS media queries in index_string
+        # will override this for mobile via the oh-calib-metrics class.
+        "gridTemplateColumns": f"repeat({n_cols}, minmax(90px, 1fr))",
+        "gap": "8px",
+        "marginBottom": "20px",
+        "overflowX": "auto",
+        "WebkitOverflowScrolling": "touch",
     })
 
     return charts_div, metrics_div
@@ -4022,13 +4034,13 @@ def page_environment(d):
         textinfo="none",
         hovertemplate="<b>%{label}</b><br>%{value}<extra></extra>",
         showlegend=False,
-        domain=dict(x=[0.10, 0.60], y=[0.40, 0.99]),  # ← raised donut slightly to free bottom space
+        domain=dict(x=[0.15, 0.85], y=[0.38, 0.98]),  # ← raised donut slightly to free bottom space
     ))
 
     # ── AQI number — centred inside donut ─────────────────────────────────────
     fig_aqi_donut.add_annotation(
         text=f"<b>{int(aqi_val) if aqi_val else '—'}</b>",
-        x=0.35, y=0.73,
+        x=0.50, y=0.72,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -4036,7 +4048,7 @@ def page_environment(d):
     )
     fig_aqi_donut.add_annotation(
         text="AQI",
-        x=0.35, y=0.58,
+        x=0.50, y=0.57,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -4046,7 +4058,7 @@ def page_environment(d):
     # ── Subtitle ──────────────────────────────────────────────────────────────
     fig_aqi_donut.add_annotation(
         text=f"Doughnut shows current AQI ({int(aqi_val) if aqi_val else '—'}) vs headroom to max (200). Scale: 0–300.",
-        x=0.0, y=1.13,
+        x=0.0, y=1.08,
         xref="paper", yref="paper",
         showarrow=False,
         font=dict(size=10, color=MUTED, family="'DM Mono',monospace"),
@@ -4070,7 +4082,7 @@ def page_environment(d):
         fig_aqi_donut.add_shape(
             type="rect",
             x0=x0, x1=x1,
-            y0=0.16, y1=0.24,              
+            y0=0.18, y1=0.26,              
             xref="paper", yref="paper",
             fillcolor=seg_color,
             line=dict(width=0),
@@ -4082,7 +4094,7 @@ def page_environment(d):
     fig_aqi_donut.add_annotation(
         text=f"▲ {int(aqi_val) if aqi_val else '—'}",
         x=marker_x,
-        y=0.29,                            
+        y=0.31,                            
         xref="paper", yref="paper",
         showarrow=False,
         font=dict(size=11, color=aqi_ring_color, family="'DM Mono',monospace"),
@@ -4103,7 +4115,7 @@ def page_environment(d):
         fig_aqi_donut.add_annotation(
             text=label_text,
             x=label_val / 300.0,
-            y=0.09,                        
+            y=0.10,                        
             xref="paper", yref="paper",
             showarrow=False,
             font=dict(
@@ -4120,8 +4132,9 @@ def page_environment(d):
     # ── Layout ────────────────────────────────────────────────────────────────
     # CHANGE 3: Increased bottom margin from b=60 → b=80 for comfortable padding.
     _aqi_layout = PLna("Air Quality & Atmospheric Conditions")
-    _aqi_layout["height"]  = 580
-    _aqi_layout["margin"]  = dict(l=20, r=20, t=80, b=130)  
+    _aqi_layout["height"]  = 500
+    _aqi_layout["margin"]  = dict(l=20, r=20, t=60, b=80) 
+    _aqi_layout["autosize"] = True 
     fig_aqi_donut.update_layout(**_aqi_layout)
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -4219,7 +4232,14 @@ def page_environment(d):
                 }),
             ], style=CARD_STYLE),
 
-            chart_card(dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False}, responsive=True), "amber"),
+            html.Div([
+                card_top_bar(C_AMBER),
+                html.Div(
+                    dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False},
+                        style={"minWidth": "420px", "width": "100%"}),
+                    style={"overflowX": "auto", "WebkitOverflowScrolling": "touch"},
+                ),
+            ], style={**CARD_STYLE, "paddingTop": "18px"}),
         ]),
 
         html.Div([
@@ -5360,6 +5380,9 @@ app.index_string = """<!DOCTYPE html>
     .oh-pill-loc     { display: none !important; }
     .oh-pill-refresh { display: none !important; }
     .oh-top-kpi > div { flex: 1 1 100% !important; }
+    .oh-calib-metrics {
+        grid-template-columns: repeat(2, 1fr) !important;
+    }
   }
 
   /* ══ SMALL PHONE  ≤ 480px ═══════════════════════════ */
@@ -5373,15 +5396,19 @@ app.index_string = """<!DOCTYPE html>
   }
 
   /* ── Chat panel mobile ── */
-  @media (max-width: 768px) {
-    #chat-panel[style*="display: block"] {
-      width: calc(100vw - 16px) !important;
-      right: 8px !important;
-      bottom: 80px !important;
-      height: 72vh !important;
-      max-height: 520px !important;
+    @media (max-width: 768px) {
+        #chat-panel[style*="display: block"] {
+        width: calc(100vw - 16px) !important;
+        right: 8px !important;
+        bottom: 80px !important;
+        height: 55vh !important;
+        max-height: 420px !important;
+        }
+        #chat-history {
+        height: 220px !important;
+        min-height: 120px !important;
+        }
     }
-  }
 </style>
 </head>
 <body>
