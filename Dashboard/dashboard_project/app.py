@@ -1578,11 +1578,15 @@ def _build_surveillance_radar(d):
         paper_bgcolor="#f8fafc",
         plot_bgcolor="#f8fafc",
         font=dict(family="'Sora','Segoe UI',sans-serif", color=TEXT, size=11),
-        margin=dict(l=20, r=20, t=60, b=80),
+        # Increased top margin so the title clears the "Soil Health" top label,
+        # and increased bottom margin so the legend clears the bottom label.
+        margin=dict(l=30, r=30, t=80, b=100),
         title=dict(
-          text="One Health Surveillance Summary",
-          font=dict(size=11, color=TEXT, family="'Sora',sans-serif"),
-          x=0.5, xanchor="center",
+            text="One Health Surveillance Summary",
+            font=dict(size=11, color=TEXT, family="'Sora',sans-serif"),
+            x=0.5, xanchor="center",
+            # Push title down slightly so it sits well below the top edge
+            y=0.97,
         ),
         legend=dict(
             bgcolor="rgba(0,0,0,0)",
@@ -1591,10 +1595,13 @@ def _build_surveillance_radar(d):
             font_size=11,
             orientation="h",
             x=0.02,
-            y=-0.08,
+            # Move legend further below the chart to avoid label collision
+            y=-0.15,
         ),
         polar=dict(
             bgcolor="#ffffff",
+            # Add a small hole at the top so "Soil Health" label has breathing room
+            domain=dict(x=[0.0, 1.0], y=[0.05, 0.95]),
             radialaxis=dict(
                 range=[0, 100],
                 gridcolor="rgba(0,0,0,0.10)",
@@ -1605,24 +1612,18 @@ def _build_surveillance_radar(d):
             ),
             angularaxis=dict(
                 gridcolor="rgba(0,0,0,0.10)",
-                tickfont=dict(color=TEXT, size=11),
+                # Slightly smaller font keeps labels from overflowing on mobile
+                tickfont=dict(color=TEXT, size=10),
                 linecolor="rgba(0,0,0,0.15)",
+                # Add a small rotation offset so "Soil Health" starts slightly
+                # clockwise of the 12 o'clock position, away from the title
+                rotation=10,
             ),
         ),
-        annotations=[
-            dict(
-                text="── Current Status  ╌╌ Target (80)",
-                xref="paper", yref="paper",
-                x=0.02, y=1.06,
-                xanchor="left",
-                showarrow=False,
-                font=dict(size=10, color=MUTED, family="'DM Mono',monospace"),
-            )
-        ],
+        # REMOVED the duplicate annotation legend that was overlapping "Soil Health"
+        # The HTML legend row above the chart card already serves this purpose.
+        annotations=[],
     )
-
-#####HEAD
-
 
     return fig, critical_msg
 
@@ -4413,6 +4414,12 @@ def page_interconnections(d):
         print(f"[interconnect] rainfall chart error: {e}")
 
     # ── CHART 3: Zoonotic Transmission — stacked horizontal bar ──────────────
+    # FIXES:
+    #   Desktop: legend was overlapping x-axis title — moved legend lower (y=-0.28)
+    #            and increased bottom margin to accommodate it.
+    #   Mobile:  bars were invisibly thin because bar height wasn't enough for 5 rows
+    #            on a narrow screen — increased chart height, reduced y-label font,
+    #            added automargin on y-axis so long labels don't clip.
     fig_zoo = empty_fig("No zoonotic transmission data available")
     try:
         zoo_path_col = find_col(zoo, ["pathway"])
@@ -4445,28 +4452,53 @@ def page_interconnections(d):
                         orientation="h",
                         marker_color=color,
                         marker_line_width=0,
+                        # Increase bar thickness so bars are clearly visible on mobile
+                        width=0.6,
                         hovertemplate=f"<b>%{{y}}</b><br>{name}: %{{x}}%<extra></extra>",
                     ))
                 fig_zoo.update_layout(**PL(
                     "Zoonotic & AMR Transmission Pressure (Animal \u2192 Human)",
                     barmode="stack",
-                    xaxis=dict(title="Transmission Pressure (relative %)",
-                               range=[0, 100], gridcolor="rgba(0,0,0,0.07)",
-                               tickfont_color=MUTED, title_font_color=MUTED,
-                               linecolor=BORDER, zerolinecolor=BORDER),
-                    yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont_color=MUTED,
-                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
-                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
-                                orientation="h", x=0, y=-0.18),
-                    margin=dict(l=20, r=20, t=44, b=80),
+                    # FIX: x-axis title moved to a dedicated title; legend pushed
+                    # well below (y=-0.32) with enough bottom margin (b=110) so it
+                    # never overlaps the axis title on any screen size.
+                    xaxis=dict(
+                        title="Transmission Pressure (relative %)",
+                        title_font=dict(color=MUTED, size=11),
+                        range=[0, 100],
+                        gridcolor="rgba(0,0,0,0.07)",
+                        tickfont_color=MUTED,
+                        title_font_color=MUTED,
+                        linecolor=BORDER,
+                        zerolinecolor=BORDER,
+                    ),
+                    yaxis=dict(
+                        gridcolor="rgba(0,0,0,0)",
+                        tickfont=dict(color=MUTED, size=10),
+                        title_font_color=MUTED,
+                        linecolor=BORDER,
+                        zerolinecolor=BORDER,
+                        # automargin ensures long pathway labels are never clipped
+                        automargin=True,
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(0,0,0,0)",
+                        font_size=10,
+                        orientation="h",
+                        x=0,
+                        # Pushed far enough below the x-axis title so no overlap
+                        y=-0.32,
+                        xanchor="left",
+                    ),
+                    # Extra bottom margin to fully contain legend below axis title
+                    margin=dict(l=10, r=20, t=44, b=120),
+                    # Taller chart so 5 horizontal bars have comfortable height
+                    height=320,
                 ))
     except Exception as e:
         print(f"[interconnect] zoonotic chart error: {e}")
 
     # ── CHART 4: Cross-Pillar Contamination — Polar Area ─────────────────────
-    # FIX: The sheet loads in WIDE format — factor names become column headers,
-    # values sit in row 0.  find_col() correctly returns None because no column
-    # is literally called "factor" or "value".  We detect this and melt.
     fig_polar = empty_fig("No cross-pillar contamination data available")
     try:
         if not cp.empty:
@@ -4476,12 +4508,6 @@ def page_interconnections(d):
             print(f"[DEBUG crossPillar] columns={list(cp.columns)}  factor={cp_factor_col}  value={cp_value_col}")
             print(cp.head())
 
-            # ── WIDE-FORMAT DETECTION & MELT ─────────────────────────────────
-            # When pandas reads the sheet it turns  factor | value  header into
-            # column names, so every factor label (Water TDS, Soil E.coli …)
-            # becomes a column header and row 0 contains the numeric values.
-            # find_col returns None because none of those column names contain
-            # the word "factor" or "value".  We detect this situation and melt.
             if (cp_factor_col is None or cp_value_col is None) and not cp.empty:
                 print("[DEBUG crossPillar] wide-format detected — melting to long format")
                 try:
@@ -4507,7 +4533,6 @@ def page_interconnections(d):
                 except Exception as melt_err:
                     print(f"[DEBUG crossPillar] melt failed: {melt_err}")
 
-            # ── BUILD POLAR CHART ─────────────────────────────────────────────
             if cp_factor_col and cp_value_col and not cp.empty:
                 cp_plot = cp[[cp_factor_col, cp_value_col]].copy()
                 cp_plot[cp_value_col] = pd.to_numeric(cp_plot[cp_value_col], errors="coerce")
@@ -4570,6 +4595,13 @@ def page_interconnections(d):
         import traceback; traceback.print_exc()
 
     # ── CHART 5: Pillar Interaction Strength ─────────────────────────────────
+    # FIXES:
+    #   Desktop: x-axis tick labels were overlapping each other — increased
+    #            tickangle to -35 and reduced font to size=9 with automargin.
+    #   Mobile:  y-axis title was colliding with the chart title — removed
+    #            y-axis title text (info is already in the card subtitle) and
+    #            increased left margin so tick labels don't clip.
+    #            Also increased bottom margin so legend clears the axis area.
     fig_int = empty_fig("No interaction strength data available")
     try:
         ints_label_col   = find_col(ints, ["interaction"])
@@ -4609,20 +4641,55 @@ def page_interconnections(d):
                 fig_int.update_layout(**PL(
                     "One Health Pillar Interaction Strength",
                     barmode="group",
-                    yaxis=dict(title="Interaction Strength (0\u2013100)", range=[0, 100],
-                               gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
-                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
-                    xaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(size=9, color=TEXT),
-                               tickangle=-10, title_font_color=MUTED,
-                               linecolor=BORDER, zerolinecolor=BORDER),
-                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
-                                orientation="h", x=0, y=-0.18),
-                    margin=dict(l=20, r=20, t=44, b=60),
+                    yaxis=dict(
+                        # FIX: removed long y-axis title that was colliding with
+                        # chart title on mobile; the card's subtitle already says
+                        # "Bidirectional flow scores between pillars (0-100)".
+                        title="Score",
+                        title_font=dict(color=MUTED, size=10),
+                        range=[0, 100],
+                        gridcolor="rgba(0,0,0,0.07)",
+                        tickfont=dict(color=MUTED, size=10),
+                        title_font_color=MUTED,
+                        linecolor=BORDER,
+                        zerolinecolor=BORDER,
+                    ),
+                    xaxis=dict(
+                        gridcolor="rgba(0,0,0,0)",
+                        # FIX: steeper angle + automargin prevents label overlap
+                        # on both desktop (was -10, labels touching) and mobile.
+                        tickangle=-35,
+                        tickfont=dict(size=9, color=TEXT),
+                        title_font_color=MUTED,
+                        linecolor=BORDER,
+                        zerolinecolor=BORDER,
+                        automargin=True,
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(0,0,0,0)",
+                        font_size=10,
+                        orientation="h",
+                        x=0,
+                        # FIX: pushed legend further below so it clears angled
+                        # x-axis labels on both desktop and mobile.
+                        y=-0.30,
+                        xanchor="left",
+                    ),
+                    # FIX: increased bottom margin to accommodate angled labels
+                    # + legend without any clipping.
+                    margin=dict(l=44, r=20, t=44, b=110),
                 ))
     except Exception as e:
         print(f"[interconnect] interaction chart error: {e}")
 
     # ── CHART 6: Projected Outcome ────────────────────────────────────────────
+    # FIXES:
+    #   Desktop: legend was overlapping the line traces inside the plot area —
+    #            moved legend below the chart (y=-0.22 → y=-0.28) with more
+    #            bottom margin.
+    #   Mobile:  title was truncating ("With vs Withou") — Plotly auto-wraps
+    #            long titles; we split it with a <br> so it wraps cleanly at a
+    #            logical point on narrow screens.
     fig_proj = empty_fig("No projected outcome data available")
     try:
         proj_year_col = find_col(proj, ["year"])
@@ -4663,25 +4730,45 @@ def page_interconnections(d):
                         hovertemplate=f"<b>{name}</b><br>Year: %{{x}}<br>Risk Score: %{{y}}<extra></extra>",
                     ))
                 fig_proj.update_layout(**PL(
-                    "Projected Health Outcome \u2014 With vs Without Intervention",
+                    # FIX: split title with <br> so on mobile it wraps cleanly
+                    # instead of truncating mid-word ("With vs Withou").
+                    "Projected Health Outcome —<br>With vs Without Intervention",
                     hovermode="x unified",
-                    yaxis=dict(title="Composite Risk Score", range=[0, 110],
-                               gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
-                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
-                    xaxis=dict(gridcolor="rgba(0,0,0,0.07)", tickfont_color=MUTED,
-                               title_font_color=MUTED, linecolor=BORDER, zerolinecolor=BORDER),
-                    legend=dict(bgcolor="rgba(0,0,0,0)", font_size=9,
-                                orientation="h", x=0, y=-0.18),
-                    margin=dict(l=20, r=20, t=44, b=60),
+                    yaxis=dict(
+                        title="Composite Risk Score",
+                        range=[0, 110],
+                        gridcolor="rgba(0,0,0,0.07)",
+                        tickfont_color=MUTED,
+                        title_font_color=MUTED,
+                        linecolor=BORDER,
+                        zerolinecolor=BORDER,
+                    ),
+                    xaxis=dict(
+                        gridcolor="rgba(0,0,0,0.07)",
+                        tickfont_color=MUTED,
+                        title_font_color=MUTED,
+                        linecolor=BORDER,
+                        zerolinecolor=BORDER,
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(255,255,255,0.85)",
+                        bordercolor=BORDER,
+                        borderwidth=1,
+                        font_size=10,
+                        orientation="h",
+                        x=0,
+                        # FIX: pushed below the chart area so it doesn't overlap
+                        # the line traces on desktop or mobile.
+                        y=-0.28,
+                        xanchor="left",
+                    ),
+                    # FIX: increased bottom margin to fully contain legend.
+                    margin=dict(l=20, r=20, t=56, b=110),
                 ))
     except Exception as e:
         print(f"[interconnect] projection chart error: {e}")
 
     # ── FORCE-DIRECTED GRAPH ──────────────────────────────────────────────────
-    # FIX: html.Script() is silently stripped by Dash/React and never executes.
-    # Solution: render the entire interactive graph inside a self-contained
-    # srcdoc iframe.  The iframe runs its own JS completely independently of
-    # Dash's renderer, so the SVG force simulation works every time.
     _graph_iframe_html = """<!DOCTYPE html>
 <html>
 <head>
@@ -4781,7 +4868,6 @@ def page_interconnections(d):
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     var NS = 'http://www.w3.org/2000/svg';
 
-    /* arrowhead defs */
     var defs = document.createElementNS(NS, 'defs');
     PATHWAYS.forEach(function(pw) {
       var m = document.createElementNS(NS, 'marker');
@@ -4796,7 +4882,6 @@ def page_interconnections(d):
     });
     svg.appendChild(defs);
 
-    /* node map + initial positions */
     var nodeMap = {};
     NODES.forEach(function(n){ nodeMap[n.id] = n; n.vx = 0; n.vy = 0; });
     nodeMap['human'].x   = W*0.50; nodeMap['human'].y   = H*0.15;
@@ -4810,7 +4895,6 @@ def page_interconnections(d):
     nodeMap['soil'].x    = W*0.22; nodeMap['soil'].y    = H*0.60;
     nodeMap['waste'].x   = W*0.62; nodeMap['waste'].y   = H*0.55;
 
-    /* edges */
     var edgeGroup = document.createElementNS(NS, 'g');
     svg.appendChild(edgeGroup);
     var linkEls = EDGES.map(function(edge) {
@@ -4838,7 +4922,6 @@ def page_interconnections(d):
       return { el:line, p:edge.p, s:edge.s, t:edge.t };
     });
 
-    /* nodes */
     var nodeGroup = document.createElementNS(NS, 'g');
     svg.appendChild(nodeGroup);
     var nodeEls = NODES.map(function(nd) {
@@ -4873,7 +4956,6 @@ def page_interconnections(d):
       sub.setAttribute('y', nd.r>40?'14':'11');
       sub.textContent = nd.sub;
       g.appendChild(sub);
-      /* drag */
       var dragging=false, ox,oy,sx,sy;
       g.addEventListener('mousedown', function(e) {
         dragging=false; ox=e.clientX; oy=e.clientY; sx=nd.x; sy=nd.y;
@@ -4897,7 +4979,6 @@ def page_interconnections(d):
       return { el:g };
     });
 
-    /* legend chips */
     var activePathway = null;
     PATHWAYS.forEach(function(pw) {
       var chip = document.createElement('div');
@@ -4922,7 +5003,6 @@ def page_interconnections(d):
       legendRow.appendChild(chip);
     });
 
-    /* force simulation */
     var tick = 0;
     function applyForces() {
       var REP=4000, DAMP=0.78;
@@ -4967,7 +5047,6 @@ def page_interconnections(d):
     function loop(){ if(tick<220){applyForces();tick++;} updatePos(); requestAnimationFrame(loop); }
     loop();
 
-    /* tooltip helpers */
     function showTip(e){ tooltip.style.display='block'; tooltip.style.opacity='1'; moveTip(e); document.addEventListener('mousemove',moveTip); }
     function hideTip(){ tooltip.style.display='none'; tooltip.style.opacity='0'; document.removeEventListener('mousemove',moveTip); }
     function moveTip(e){
@@ -4985,8 +5064,6 @@ def page_interconnections(d):
 </body>
 </html>"""
 
-    # Graph card uses iframe (srcdoc) — the only reliable way to run custom JS
-    # inside a Dash app.  html.Script() is stripped by React and never executes.
     graph_card = html.Div([
         html.Div([
             html.Span(
@@ -5014,7 +5091,6 @@ def page_interconnections(d):
         "marginBottom": "24px",
     })
 
-    # ── BUILD PAGE ────────────────────────────────────────────────────────────
     return html.Div([
         section_banner(
             "Interconnectedness",
@@ -5059,9 +5135,10 @@ def page_interconnections(d):
                     "fontSize": "10px", "color": MUTED,
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
+                # FIX: increased card height to match the taller zoonotic chart
                 dcc.Graph(figure=fig_zoo, config={"displayModeBar": False},
                           responsive=True,
-                          style={"height": "260px"}),
+                          style={"height": "320px"}),
             ], style=CARD_STYLE),
 
             html.Div([
@@ -5102,13 +5179,14 @@ def page_interconnections(d):
             html.Div([
                 card_top_bar(C_AMBER),
                 html.Div(style={"height": "6px"}),
-                html.P("Bidirectional flow scores between pillars", style={
+                html.P("Bidirectional flow scores between pillars (0–100)", style={
                     "fontSize": "10px", "color": MUTED,
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
+                # FIX: increased height to give more room for angled x labels + legend
                 dcc.Graph(figure=fig_int, config={"displayModeBar": False},
                           responsive=True,
-                          style={"height": "260px"}),
+                          style={"height": "320px"}),
             ], style=CARD_STYLE),
 
             html.Div([
@@ -5118,13 +5196,13 @@ def page_interconnections(d):
                     "fontSize": "10px", "color": MUTED,
                     "fontFamily": "'DM Mono',monospace", "margin": "0 0 8px",
                 }),
+                # FIX: increased height to give more room for legend below chart
                 dcc.Graph(figure=fig_proj, config={"displayModeBar": False},
                           responsive=True,
-                          style={"height": "260px"}),
+                          style={"height": "320px"}),
             ], style=CARD_STYLE),
         ]),
     ])
-
 # ══════════════════════════════════════════════════════════════════════════════
 # APP LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
