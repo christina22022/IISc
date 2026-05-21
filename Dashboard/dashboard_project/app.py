@@ -240,6 +240,67 @@ SHEETS = {
     "overview_id":"19gLj_SxcjJCwppnn1Y7q_2MmXzdG_-ik",
 }
 
+VILLAGE_CONFIG = {
+    "village1": {
+        "name": "BETTAHALASURU",
+        "overview_sheet": SHEETS["overview_id"],
+        "human_sheet": SHEETS["human_id"],
+        "animal_sheet": SHEETS["animal_id"],
+        "environment_sheet": SHEETS["env_id"],
+        "interconnectedness_sheet": SHEETS["inter_id"],
+    },
+    "village2": {
+        "name": "Village 2",
+        "overview_sheet": "1rirF-jWznc0r6_7GKoRKKPk5gKFaS9XvefnVOoXxrzY",
+        "human_sheet": "18hsiTzjLEpyzBgQffjiwSYGtRJ9z5CErXPa7jL1YwAs",
+        "animal_sheet": "18hsiTzjLEpyzBgQffjiwSYGtRJ9z5CErXPa7jL1YwAs",
+        "environment_sheet": "19fLxsu8N1oJbZYy6PeN6-OrvOVqdl4BzqyyJk5Nx7MQ",
+        "interconnectedness_sheet": "1X1sO3dDjkve83bDCdl-6JR0Q-gp1wBYlyM_n0GC7muM",
+    },
+    "village3": {
+        "name": "Village 3",
+        "overview_sheet": "16qOZaoSGC4qJojdyREPT-5KBe7oiUlHBgymnsweAyV8",
+        "human_sheet": "15zx59Ur6jJ2Jm4gp810TvQO9C0nPzEi_9aopd3AbLVo",
+        "animal_sheet": "1pupQs4Meh8B9e_7rsCAVcZkcePksiVSZiBjnYhFsbaI",
+        "environment_sheet": "1iKzI2I0EE1evn31DZrJyPE_FqQ5Zn03JX_9m5ELx1PA",
+        "interconnectedness_sheet": "1RfTZ779n7s2ijZar4FqXRe-7Haec4reGVrDEaJP_VVg",
+    },
+    "village4": {
+        "name": "Village 4",
+        "overview_sheet": "1hm-t_N2ztGZUEFsQwtR872FvvPFirvUccOYbVWgFxYg",
+        "human_sheet": "1yh8K61b-fEWWZ50QtHNTQ42mDLxHtxZWrqHpxv-fJ6o",
+        "animal_sheet": "1TRT5UkZxRsiQJFGKZ8E_RX2whZHzOiVmmgi39IKATMc",
+        "environment_sheet": "1J5GXl8OgreBu0eUUui3eryY2ZVEjwbXNscajCDP9SVU",
+        "interconnectedness_sheet": "1mdQ7_ABCdtTtQa8YWG-ZOQLE7U4Tfpynw_aX8QJzzTE",
+    },
+}
+
+SHEET_KEY_BY_SOURCE = {
+    "human_id": "human_sheet",
+    "animal_id": "animal_sheet",
+    "env_id": "environment_sheet",
+    "inter_id": "interconnectedness_sheet",
+    "overview_id": "overview_sheet",
+}
+
+CURRENT_VILLAGE = "village1"
+
+
+def village_sheet_id(sid_key, village_key=None):
+    village_key = village_key if village_key in VILLAGE_CONFIG else "village1"
+    config_key = SHEET_KEY_BY_SOURCE.get(sid_key)
+    if not config_key:
+        return SHEETS.get(sid_key, "")
+    return VILLAGE_CONFIG.get(village_key, VILLAGE_CONFIG["village1"]).get(config_key, SHEETS.get(sid_key, ""))
+
+
+def current_village_name():
+    return VILLAGE_CONFIG.get(CURRENT_VILLAGE, VILLAGE_CONFIG["village1"])["name"]
+
+
+def village1_default(value, blank="-"):
+    return value if CURRENT_VILLAGE == "village1" else blank
+
 TABS = {
     # ───────── HUMAN ─────────
     "kpi_data":                ("human_id", "kpi_data"),
@@ -296,23 +357,68 @@ LOCAL = {
     "overview_id": os.path.join(DDIR, "overview.xlsx"),
 }
 
+LOCAL_BY_VILLAGE = {
+    "village1": LOCAL,
+    "village2": {
+        "human_id":    os.path.join(DDIR, "Human-Village-2.xlsx"),
+        "animal_id":   os.path.join(DDIR, "Animal-Village-2.xlsx"),
+        "env_id":      os.path.join(DDIR, "Environment-Village-2.xlsx"),
+        "inter_id":    os.path.join(DDIR, "Interconnectedness-Village-2.xlsx"),
+        "overview_id": os.path.join(DDIR, "Overview-Village -2.xlsx"),
+    },
+    "village3": {
+        "human_id":    os.path.join(DDIR, "Human-Village-3.xlsx"),
+        "animal_id":   os.path.join(DDIR, "Animal-Village-3.xlsx"),
+        "env_id":      os.path.join(DDIR, "Environment-Village-3.xlsx"),
+        "inter_id":    os.path.join(DDIR, "Interconnectedness-Village-3.xlsx"),
+        "overview_id": os.path.join(DDIR, "Overview-Village-3.xlsx"),
+    },
+    "village4": {
+        "human_id":    os.path.join(DDIR, "Human-Village-4.xlsx"),
+        "animal_id":   os.path.join(DDIR, "Animal-Village-4.xlsx"),
+        "env_id":      os.path.join(DDIR, "Environment-Village-4.xlsx"),
+        "inter_id":    os.path.join(DDIR, "Interconnectedness-Village-4.xlsx"),
+        "overview_id": os.path.join(DDIR, "Overview-Village-4.xlsx"),
+    },
+}
 
-def fetch(tab_name):
+
+def _norm_sheet_name(name):
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def read_local_sheet(local_path, tab):
+    if not local_path:
+        raise FileNotFoundError("No local fallback configured")
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(f"Local fallback file not found: {local_path}")
+    try:
+        return pd.read_excel(local_path, sheet_name=tab)
+    except ValueError:
+        xls = pd.ExcelFile(local_path)
+        wanted = _norm_sheet_name(tab)
+        for sheet_name in xls.sheet_names:
+            if _norm_sheet_name(sheet_name) == wanted:
+                return pd.read_excel(local_path, sheet_name=sheet_name)
+        raise
+
+
+def local_path_for(village_key, sid_key):
+    return LOCAL_BY_VILLAGE.get(village_key, LOCAL).get(sid_key)
+
+
+def fetch(tab_name, village_key=None):
+    village_key = village_key if village_key in VILLAGE_CONFIG else "village1"
     sid_key, tab = TABS[tab_name]
-    sheet_id = SHEETS[sid_key]
+    sheet_id = village_sheet_id(sid_key, village_key)
     if sheet_id and not sheet_id.startswith("YOUR_"):
         try:
             url = BASE_URL.format(sheet_id=sheet_id, tab=tab)
             df = pd.read_csv(url)
             return df
         except Exception as e:
-            print(f"[WARN] Google Sheets fetch failed for {tab_name}: {e}. Falling back to local.")
-    local_path = LOCAL.get(sid_key)
-    if not local_path:
-        raise FileNotFoundError(f"No local fallback configured for key: {sid_key}")
-    if not os.path.exists(local_path):
-        raise FileNotFoundError(f"Local fallback file not found: {local_path}")
-    return pd.read_excel(local_path, sheet_name=tab)
+            print(f"[WARN] Google Sheets fetch failed for {village_key}/{tab_name}: {e}. Falling back to local workbook.")
+    return read_local_sheet(local_path_for(village_key, sid_key), tab)
 #────────────────────────────────────────────────────────────────────────────
 #-----------CHAT BOT----------------------------------------------------------------------------------------------------------------------------------------------------
 #────────────────────────────────────────────────────────────────────────────
@@ -1007,12 +1113,13 @@ def parse_gram_staining(d):
     return result
 
 
-def load_all():
+def load_all(village_key=None):
     d = {}
+    village_key = village_key if village_key in VILLAGE_CONFIG else "village1"
 
     for t in TABS.keys():
         try:
-            df = fetch(t)
+            df = fetch(t, village_key)
 
             if not isinstance(df, pd.DataFrame):
                 try:
@@ -1099,7 +1206,7 @@ def load_all():
 
     return d
 
-DATA = load_all()
+DATA = load_all(CURRENT_VILLAGE)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DESIGN SYSTEM
@@ -1189,6 +1296,30 @@ def section_banner(title, subtitle):
             "letterSpacing": "0.5px", "fontWeight": "600",
             "margin": "0 0 28px", "wordBreak": "break-word",
         }),
+    ])
+
+
+def selected_village_data_missing(d, keys, village_key=None):
+    vk = village_key if village_key is not None else CURRENT_VILLAGE
+    if vk == "village1":
+        return False
+    return all(d.get(k, pd.DataFrame()).empty for k in keys)
+
+
+def no_selected_village_data_page(section_name):
+    return html.Div([
+        section_banner(
+            section_name,
+            f"NO {current_village_name().upper()} DATA LOADED FOR THIS SECTION"
+        ),
+        html.Div(
+            "This section did not load village-specific sheet data. Village 1 fallback data is not used here; only live AQI and humidity are shared across villages.",
+            style={
+                "padding": "22px", "border": f"1px solid {BORDER}",
+                "borderRadius": "8px", "background": PANEL,
+                "color": MUTED, "fontSize": "14px", "lineHeight": "1.7",
+            },
+        ),
     ])
 
 
@@ -1745,6 +1876,9 @@ def empty_fig(msg="No data available"):
 
 
 def page_overview(d):
+    if selected_village_data_missing(d, ["onehealth_summary", "onehealth_risk"]):
+        return no_selected_village_data_page("Overview")
+
     kpis = _get_overview_kpis(d)
 
     def ensure_plus(val):
@@ -2180,6 +2314,9 @@ def _parse_disease_insights(di_df):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def page_human(d):
+    if selected_village_data_missing(d, ["kpi_data", "majorDiseases", "diseaseBurden", "vectorInsights", "phcScreeningPrograms"]):
+        return no_selected_village_data_page("Human Pillar")
+
     md = d.get("majorDiseases", pd.DataFrame())
     vt = d.get("vectorDiseaseTrend", pd.DataFrame())
     db = d.get("diseaseBurden", pd.DataFrame())
@@ -2462,7 +2599,7 @@ def page_human(d):
     # ════════════════════════════════════════════════════════════════════
     # HEADER
     # ════════════════════════════════════════════════════════════════════
-    header = section_banner("Human Pillar", "PRIMARY HEALTH CENTRE · BETTAHALASURU")
+    header = section_banner("Human Pillar", f"PRIMARY HEALTH CENTRE - {current_village_name().upper()}")
 
     # ════════════════════════════════════════════════════════════════════
     # VECTOR MINI BLOCKS
@@ -2521,6 +2658,7 @@ def page_human(d):
             "flex": "1",
             "minWidth": "0",
             "borderRight": f"1px solid {BORDER}" if not is_last else "none",
+            
         })
 
     vector_mini_cards = [
@@ -2592,7 +2730,7 @@ def page_human(d):
                 "flex": "1", "textAlign": "center",
             }),
         ], style={"display": "flex", "gap": "8px"}),
-        html.P("Bettahalasuru Village, Karnataka", style={
+        html.P(f"{current_village_name()} Village, Karnataka", style={
             "fontSize": "10px", "color": MUTED, "margin": "7px 0 0",
         }),
     ], style={
@@ -2782,6 +2920,9 @@ def page_human(d):
     ])
 
 def page_animal(d):
+    if selected_village_data_missing(d, ["animal_kpi_data", "abcProgram", "rabiesProjection", "amrFindings", "animalInsights"]):
+        return no_selected_village_data_page("Animal Pillar")
+
     """
     Animal Pillar – design matches the static OneHealth_Dashboard2.html exactly.
     Layout:
@@ -2797,16 +2938,16 @@ def page_animal(d):
 
     # ── KPI extraction ────────────────────────────────────────────────────────
     a_stray_dogs_raw = kpi_val_from_wide(
-        akpi, ["strayDogs", "stray_dogs", "stray dogs", "StrayDogs"], "73+")
+        akpi, ["strayDogs", "stray_dogs", "stray dogs", "StrayDogs"], village1_default("73+"))
     a_abc_count_raw  = kpi_val_from_wide(
-        akpi, ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "abcCount"], "17+")
+        akpi, ["abcProgramCount", "abc_program_count", "abcProgram", "abc", "abcCount"], village1_default("17+"))
     a_rabies_raw     = kpi_val_from_wide(
         akpi,
         ["rabiesInfectionReductionPercent", "rabiesInfectionRate",
          "rabiesRate", "rabies_rate", "rabiesInfRate", "rabiesInf"],
-        "0.13")
+        village1_default("0.13", ""))
     a_livestock_raw  = kpi_val_from_wide(
-        akpi, ["livestockMonitored", "livestock_monitored", "livestock", "Livestock"], "700-1000")
+        akpi, ["livestockMonitored", "livestock_monitored", "livestock", "Livestock"], village1_default("700-1000"))
 
     # Format stray dogs – keep the "+" suffix from the sheet
     a_stray_dogs = str(a_stray_dogs_raw).strip()
@@ -2822,8 +2963,8 @@ def page_animal(d):
         a_rabies_display = f"↓{int(_r)}%"
         a_rabies_rate_pct = int(_r)
     except Exception:
-        a_rabies_display  = "↓13%"
-        a_rabies_rate_pct = 13
+        a_rabies_display  = "13%" if CURRENT_VILLAGE == "village1" else "-"
+        a_rabies_rate_pct = 13 if CURRENT_VILLAGE == "village1" else 0
 
     # Format livestock – keep range string e.g. "700–1k"
     _lv = str(a_livestock_raw).strip()
@@ -2852,8 +2993,8 @@ def page_animal(d):
                 return val if val and val.lower() != "nan" else default
         return default
 
-    neutered_infection_rate     = get_ai_metric("neutered infection",     "13%")
-    non_neutered_infection_rate = get_ai_metric("non.neutered infection", "9%")
+    neutered_infection_rate     = get_ai_metric("neutered infection",     village1_default("13%"))
+    non_neutered_infection_rate = get_ai_metric("non.neutered infection", village1_default("9%"))
 
     # ── ABC table rows ────────────────────────────────────────────────────────
     abc_date_col     = find_col(abc, ["date"])
@@ -2922,15 +3063,16 @@ def page_animal(d):
                 (badge(release[2], "good"), 1),
             ])
 
-    # Fallback to the static dashboard's exact rows
-    abc_table_rows = abc_table_rows_dynamic if len(abc_table_rows_dynamic) >= 3 else [
-        [("05-Mar-2024",    1.5), ("Dogs picked up from Bettahalasuru village",          3), (badge("17",     "info"), 1)],
-        [("06-Mar-2024",    1.5), ("Neutering completed + anti-rabies vaccination",      3), (badge("17",     "good"), 1)],
-        [("07–10-Mar-2024", 1.5), ("Post-operative care + antibiotic shots (4 days)",   3), (badge("All 17", "good"), 1)],
-        [("11-Mar-2024",    1.5), ("Released at original pickup location",               3), (badge("17",     "good"), 1)],
-    ]
+    # Fallback to the static dashboard rows only for BETTAHALASURU.
+    abc_table_rows_fallback = [
+        [("05-Mar-2024",    1.5), (f"Dogs picked up from {current_village_name()} village", 3), (badge("17",     "info"), 1)],
+        [("06-Mar-2024",    1.5), ("Neutering completed + anti-rabies vaccination",        3), (badge("17",     "good"), 1)],
+        [("07-10-Mar-2024", 1.5), ("Post-operative care + antibiotic shots (4 days)",     3), (badge("All 17", "good"), 1)],
+        [("11-Mar-2024",    1.5), ("Released at original pickup location",                 3), (badge("17",     "good"), 1)],
+    ] if CURRENT_VILLAGE == "village1" else []
+    abc_table_rows = abc_table_rows_dynamic if len(abc_table_rows_dynamic) >= 3 else abc_table_rows_fallback
 
-    # ── AMR table rows ────────────────────────────────────────────────────────
+    # AMR table rows ────────────────────────────────────────────────────────
     amr_ant_col    = find_col(amr, ["antibiotic"])
     amr_sample_col = find_col(amr, ["sampleType", "sample_type", "sample"])
     amr_level_col  = find_col(amr, ["levelFound", "level_found", "level"])
@@ -2963,15 +3105,16 @@ def page_animal(d):
                 (badge(stat_txt, bkind),                   1),
             ])
 
-    amr_table_rows = amr_table_rows_dynamic if amr_table_rows_dynamic else [
+    amr_table_rows_fallback = [
         [("Doxycycline", 1.2), ("Pig Excreta", 1.5), ("0.000002 mg/g", 1.5), ("0.02 mg/g", 1.2), (badge("Safe",  "good"), 1)],
         [("Doxycycline", 1.2), ("Hen Excreta", 1.5), ("0.00348 mg/g",  1.5), ("0.02 mg/g", 1.2), (badge("Safe",  "good"), 1)],
-        [("Amoxicillin", 1.2), ("Feed",        1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
-        [("Amoxicillin", 1.2), ("Excreta",     1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
-        [("Amoxicillin", 1.2), ("Water",       1.5), ("None detected",  1.5), ("—",         1.2), (badge("Clear", "good"), 1)],
-    ]
+        [("Amoxicillin", 1.2), ("Feed",        1.5), ("None detected",  1.5), ("-",          1.2), (badge("Clear", "good"), 1)],
+        [("Amoxicillin", 1.2), ("Excreta",     1.5), ("None detected",  1.5), ("-",          1.2), (badge("Clear", "good"), 1)],
+        [("Amoxicillin", 1.2), ("Water",       1.5), ("None detected",  1.5), ("-",          1.2), (badge("Clear", "good"), 1)],
+    ] if CURRENT_VILLAGE == "village1" else []
+    amr_table_rows = amr_table_rows_dynamic if amr_table_rows_dynamic else amr_table_rows_fallback
 
-    # ── Rabies 5-Year Grouped Bar Chart (matches static exactly) ──────────────
+    # Rabies 5-Year Grouped Bar Chart (matches static exactly) ──────────────
     rp_year_col = find_col(rp, ["year"])
     fig_rab     = empty_fig("No rabies projection data available")
 
@@ -2987,9 +3130,9 @@ def page_animal(d):
                 return vals if vals else fallback
             return fallback
 
-        no_abc_data  = _series(col_noabc,   [10, 18, 30, 55, 95])
-        abc_data     = _series(col_abc,     [12, 22, 33, 48, 65])
-        abcvacc_data = _series(col_abcvacc, [3,  5,  6,  6,  7])
+        no_abc_data  = _series(col_noabc,   ([10, 18, 30, 55, 95] if CURRENT_VILLAGE == "village1" else []))
+        abc_data     = _series(col_abc,     ([12, 22, 33, 48, 65] if CURRENT_VILLAGE == "village1" else []))
+        abcvacc_data = _series(col_abcvacc, ([3,  5,  6,  6,  7] if CURRENT_VILLAGE == "village1" else []))
         n_years      = max(len(no_abc_data), len(abc_data), len(abcvacc_data))
         year_labels  = [f"Year {i+1}" for i in range(n_years)]
 
@@ -3186,7 +3329,7 @@ def page_animal(d):
         # ── Section header ─────────────────────────────────────────────────
         section_banner(
             "Animal Pillar",
-            "STRAY DOG MANAGEMENT · LIVESTOCK AMR · POULTRY & PIGGERY · BETTAHALASURU",
+            f"STRAY DOG MANAGEMENT - LIVESTOCK AMR - POULTRY & PIGGERY - {current_village_name().upper()}",
         ),
 
         # ── Row 1: 4 KPI cards ─────────────────────────────────────────────
@@ -3211,7 +3354,7 @@ def page_animal(d):
             # Card 2 – ABC Programme (green)
             html.Div([
                 card_top_bar(C_GREEN),
-                html.P("ABC MAR–2024 (BETTAHALASURU)", style={
+                html.P(f"ABC MAR-2024 ({current_village_name().upper()})", style={
                     "fontFamily": "'DM Mono',monospace", "fontSize": "10px",
                     "fontWeight": "700", "color": MUTED,
                     "letterSpacing": "1px", "textTransform": "uppercase",
@@ -3275,7 +3418,7 @@ def page_animal(d):
             html.Div([
                 card_top_bar(C_BLUE),
                 html.Div(style={"height": "6px"}),
-                card_title("Stray Dog ABC — Bettahalasuru (March 2024)"),
+                card_title(f"Stray Dog ABC - {current_village_name()} (March 2024)"),
 
                 data_table_wrap(
                     [("Date", 1.5), ("Activity", 3), ("Count", 1)],
@@ -3560,8 +3703,13 @@ def _build_calib_content(drug_filter):
     n_cols   = max(n_cols, 1)
     metrics_div = html.Div(mc, style={
         "display": "grid",
-        "gridTemplateColumns": f"repeat({n_cols}, 1fr)",
-        "gap": "12px", "marginBottom": "20px",
+        # On desktop: n_cols columns. CSS media queries in index_string
+        # will override this for mobile via the oh-calib-metrics class.
+        "gridTemplateColumns": f"repeat({n_cols}, minmax(90px, 1fr))",
+        "gap": "8px",
+        "marginBottom": "20px",
+        "overflowX": "auto",
+        "WebkitOverflowScrolling": "touch",
     })
 
     return charts_div, metrics_div
@@ -3569,6 +3717,19 @@ def _build_calib_content(drug_filter):
 
 ##################################################################
 def page_environment(d):
+    # For non-village1, if ANY of the key environment sheets is missing, show placeholder
+    if CURRENT_VILLAGE != "village1":
+        has_any = any(
+            not d.get(k, pd.DataFrame()).empty
+            for k in ["final_waterQuality_complete", "lake_full_integration",
+                      "gram_staining_data", "soil_data", "soil_cfu",
+                      "water_quality", "air_quality"]
+        )
+        if not has_any:
+            return no_selected_village_data_page("Environment Pillar")
+    elif selected_village_data_missing(d, ["final_waterQuality_complete", "lake_full_integration", "gram_staining_data", "soil_data", "soil_cfu"]):
+        return no_selected_village_data_page("Environment Pillar")
+
     wq       = d.get("water_quality",         pd.DataFrame())
     lc_raw   = d.get("lake_full_integration", pd.DataFrame())
     gsd      = d.get("gram_staining_data",    pd.DataFrame())
@@ -3591,6 +3752,9 @@ def page_environment(d):
         aqi_val = float(aqi_display)
     except (TypeError, ValueError):
         aqi_val = 0
+    if not np.isfinite(aqi_val):
+        aqi_val = 0
+        aqi_display = "-"
 
     effluent_tds    = "—"
     wq_source_col_e = find_col(wq, ["source_name", "sourceName", "source", "location", "label"])
@@ -3851,7 +4015,7 @@ def page_environment(d):
         [("S9",  0.5), ("Poultry Farm Borewell",  2), ("6.61", 0.6), ("538",  0.8), ("378",  0.8), ("7.03", 0.6), ("0.32",  0.8), (badge("Treat First", "warn"), 1)],
         [("S10", 0.5), ("Piggery Water",          2), ("6.25", 0.6), ("112",  0.8), ("204",  0.8), ("8.91", 0.6), ("BDL",   0.8), (badge("Agriculture", "info"), 1)],
     ]
-    wq_table_rows = wq_table_rows_dynamic if wq_table_rows_dynamic else wq_table_rows_fallback
+    wq_table_rows = wq_table_rows_dynamic if wq_table_rows_dynamic else (wq_table_rows_fallback if CURRENT_VILLAGE == "village1" else [])
 
     # ═════════════════════════════════════════════════════════════════════════
     # MICROBIAL ANALYSIS TABLE
@@ -3894,7 +4058,7 @@ def page_environment(d):
                 (s_id, 0.5), (loc, 2), (na_v, 1), (emb_v, 1.5), (badge(status, bkind), 1),
             ])
 
-    if not mc_table_rows:
+    if not mc_table_rows and CURRENT_VILLAGE == "village1":
         mc_table_rows = [
             [("S1", 0.5), ("Lake BH Entry 1", 2), ("Moderate (257 col)", 1), ("Enterobacter aerogenes", 1.5), (badge("Moderate", "warn"), 1)],
             [("S2", 0.5), ("Lake BH Entry 2", 2), ("TNTC",               1), ("Enterobacter aerogenes", 1.5), (badge("High",     "bad"),  1)],
@@ -4022,13 +4186,13 @@ def page_environment(d):
         textinfo="none",
         hovertemplate="<b>%{label}</b><br>%{value}<extra></extra>",
         showlegend=False,
-        domain=dict(x=[0.10, 0.60], y=[0.40, 0.99]),  # ← raised donut slightly to free bottom space
+        domain=dict(x=[0.15, 0.85], y=[0.38, 0.98]),  # ← raised donut slightly to free bottom space
     ))
 
     # ── AQI number — centred inside donut ─────────────────────────────────────
     fig_aqi_donut.add_annotation(
         text=f"<b>{int(aqi_val) if aqi_val else '—'}</b>",
-        x=0.35, y=0.73,
+        x=0.50, y=0.72,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -4036,7 +4200,7 @@ def page_environment(d):
     )
     fig_aqi_donut.add_annotation(
         text="AQI",
-        x=0.35, y=0.58,
+        x=0.50, y=0.57,
         xref="paper", yref="paper",
         xanchor="center", yanchor="middle",
         showarrow=False,
@@ -4046,7 +4210,7 @@ def page_environment(d):
     # ── Subtitle ──────────────────────────────────────────────────────────────
     fig_aqi_donut.add_annotation(
         text=f"Doughnut shows current AQI ({int(aqi_val) if aqi_val else '—'}) vs headroom to max (200). Scale: 0–300.",
-        x=0.0, y=1.13,
+        x=0.0, y=1.08,
         xref="paper", yref="paper",
         showarrow=False,
         font=dict(size=10, color=MUTED, family="'DM Mono',monospace"),
@@ -4070,7 +4234,7 @@ def page_environment(d):
         fig_aqi_donut.add_shape(
             type="rect",
             x0=x0, x1=x1,
-            y0=0.16, y1=0.24,              
+            y0=0.18, y1=0.26,              
             xref="paper", yref="paper",
             fillcolor=seg_color,
             line=dict(width=0),
@@ -4082,7 +4246,7 @@ def page_environment(d):
     fig_aqi_donut.add_annotation(
         text=f"▲ {int(aqi_val) if aqi_val else '—'}",
         x=marker_x,
-        y=0.29,                            
+        y=0.31,                            
         xref="paper", yref="paper",
         showarrow=False,
         font=dict(size=11, color=aqi_ring_color, family="'DM Mono',monospace"),
@@ -4103,7 +4267,7 @@ def page_environment(d):
         fig_aqi_donut.add_annotation(
             text=label_text,
             x=label_val / 300.0,
-            y=0.09,                        
+            y=0.10,                        
             xref="paper", yref="paper",
             showarrow=False,
             font=dict(
@@ -4120,8 +4284,9 @@ def page_environment(d):
     # ── Layout ────────────────────────────────────────────────────────────────
     # CHANGE 3: Increased bottom margin from b=60 → b=80 for comfortable padding.
     _aqi_layout = PLna("Air Quality & Atmospheric Conditions")
-    _aqi_layout["height"]  = 580
-    _aqi_layout["margin"]  = dict(l=20, r=20, t=80, b=130)  
+    _aqi_layout["height"]  = 500
+    _aqi_layout["margin"]  = dict(l=20, r=20, t=60, b=80) 
+    _aqi_layout["autosize"] = True 
     fig_aqi_donut.update_layout(**_aqi_layout)
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -4219,7 +4384,14 @@ def page_environment(d):
                 }),
             ], style=CARD_STYLE),
 
-            chart_card(dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False}, responsive=True), "amber"),
+            html.Div([
+                card_top_bar(C_AMBER),
+                html.Div(
+                    dcc.Graph(figure=fig_aqi_donut, config={"displayModeBar": False},
+                        style={"minWidth": "420px", "width": "100%"}),
+                    style={"overflowX": "auto", "WebkitOverflowScrolling": "touch"},
+                ),
+            ], style={**CARD_STYLE, "paddingTop": "18px"}),
         ]),
 
         html.Div([
@@ -4244,6 +4416,9 @@ def page_environment(d):
 #################################################################
 
 def page_interconnections(d):
+    if selected_village_data_missing(d, ["riskMatrix", "zoonoticTransmission", "rainfallDisease", "crossPillarIndex", "interactionStrength", "projectedOutcome"]):
+        return no_selected_village_data_page("Interconnectedness")
+
     try:
         zoo  = d.get("zoonoticTransmission", pd.DataFrame())
         rd   = d.get("rainfallDisease",      pd.DataFrame())
@@ -4818,7 +4993,7 @@ def page_interconnections(d):
     { id:'human',   emoji:'\ud83d\udc64', sub:'HUMAN',       color:'#4fc3f7', r:52,
       info:'<b style="color:#0284c7">Human Pillar</b><br>3,573 residents \u00b7 PHC monitored<br>NCD burden, vector-borne & zoonotic disease risk' },
     { id:'animal',  emoji:'\ud83d\udc3e', sub:'ANIMAL',      color:'#69f0ae', r:52,
-      info:'<b style="color:#15803d">Animal Pillar</b><br>73+ strays \u00b7 700\u20131k livestock<br>Rabies 13% post-ABC \u00b7 AMR monitored' },
+      info:'<b style="color:#15803d">Animal Pillar</b><br>Stray dog, livestock and AMR indicators<br>Loaded from the selected village animal sheet' },
     { id:'environ', emoji:'\ud83c\udf3f', sub:'ENVIRONMENT', color:'#ff7043', r:52,
       info:'<b style="color:#b91c1c">Environment Pillar</b><br>AQI 135 \u00b7 Humidity 37%<br>8/10 water samples exceed WHO TDS \u00b7 TNTC soil load' },
     { id:'water',  emoji:'\ud83d\udca7', sub:'Water',    color:'#29b6f6', r:26,
@@ -4847,7 +5022,7 @@ def page_interconnections(d):
     { s:'air',     t:'human',   p:'e2h', label:'Poor AQI \u2192 respiratory',  info:'AQI 135 + low humidity \u2192 TB, COPD, respiratory infections in children & elderly' },
     { s:'vector',  t:'human',   p:'e2h', label:'Mosquito transmission',        info:'Dengue 60 (2022), malaria 30\u201350/yr, chikungunya 10\u201325/yr from stagnant water zones' },
     { s:'environ', t:'air',     p:'e2h', label:'Quarrying & emissions',        info:'Quarrying depletes groundwater & raises dust \u2014 forcing reliance on surface sources' },
-    { s:'rabies',  t:'human',   p:'a2h', label:'Rabies bite risk',             info:'13% rabies infection in neutered-only pop. 73+ strays. Dog bites reported.' },
+    { s:'rabies',  t:'human',   p:'a2h', label:'Rabies bite risk',             info:'Rabies, dog-bite and stray-dog indicators from the selected village animal sheet.' },
     { s:'animal',  t:'rabies',  p:'a2h', label:'Stray dog reservoir',          info:'ABC program (17 dogs, Mar 2024) neutered \u2014 vaccination gaps leave 13% infected' },
     { s:'amr',     t:'human',   p:'a2h', label:'AMR food-chain risk',          info:'Sub-threshold residues risk transferring resistance to human gut flora via food chain' },
     { s:'human',   t:'rabies',  p:'h2a', label:'ABC intervention',             info:'ABC program: 17 dogs neutered + anti-rabies shot (Mar 2024).' },
@@ -5094,7 +5269,7 @@ def page_interconnections(d):
     return html.Div([
         section_banner(
             "Interconnectedness",
-            "HOW HUMAN \u00b7 ANIMAL \u00b7 ENVIRONMENT HEALTH ARE LINKED IN BETTAHALASURU"
+            f"HOW HUMAN - ANIMAL - ENVIRONMENT HEALTH ARE LINKED IN {current_village_name().upper()}"
         ),
 
         graph_card,
@@ -5207,6 +5382,45 @@ def page_interconnections(d):
 # APP LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+def page_village_selection(d):
+    cards = []
+    accents = [C_BLUE, C_GREEN, C_PURPLE, C_AMBER]
+    for idx, (village_key, cfg) in enumerate(VILLAGE_CONFIG.items()):
+        color = accents[idx % len(accents)]
+        cards.append(
+            html.Button([
+                html.Div(cfg["name"], style={
+                    "fontSize": "24px", "fontWeight": "800", "color": TEXT,
+                    "marginBottom": "8px", "fontFamily": "'Sora',sans-serif",
+                }),
+                html.Div("Open village dashboard", style={
+                    "fontSize": "12px", "fontWeight": "700", "color": color,
+                    "fontFamily": "'DM Mono',monospace", "textTransform": "uppercase",
+                    "letterSpacing": "0.5px",
+                }),
+            ], id=f"select-{village_key}", n_clicks=0, style={
+                "textAlign": "left", "padding": "26px", "minHeight": "150px",
+                "border": f"1px solid {BORDER}", "borderTop": f"4px solid {color}",
+                "borderRadius": "8px", "background": "#ffffff", "cursor": "pointer",
+                "boxShadow": "0 8px 24px rgba(15,23,42,0.08)",
+                "display": "flex", "flexDirection": "column", "justifyContent": "space-between",
+            })
+        )
+
+    return html.Div([
+        section_banner(
+            "Choose a Village",
+            "Select one village to load its overview, human, animal, environment and interconnectedness dashboards."
+        ),
+        html.Div(cards, style={
+            "display": "grid",
+            "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+            "gap": "18px",
+            "marginTop": "24px",
+        }),
+    ])
+
 def page_guard(page_fn):
     def wrapped(d):
         try:
@@ -5215,7 +5429,14 @@ def page_guard(page_fn):
             print(f"[ERROR] Page failed: {e}")
             import traceback
             traceback.print_exc()
-            return html.Div("Error loading page")
+            return html.Div([
+                html.P(
+                    f"Data for {CURRENT_VILLAGE.replace('village', 'Village ')} is not yet available for this section.",
+                    style={"padding": "24px", "color": "#64748b", "fontSize": "14px",
+                           "background": "#f8fafc", "borderRadius": "8px",
+                           "border": "1px solid rgba(0,0,0,0.08)", "marginTop": "20px"},
+                )
+            ])
     return wrapped
 
 
@@ -5360,6 +5581,7 @@ app.index_string = """<!DOCTYPE html>
     .oh-pill-loc     { display: none !important; }
     .oh-pill-refresh { display: none !important; }
     .oh-top-kpi > div { flex: 1 1 100% !important; }
+    
   }
 
   /* ══ SMALL PHONE  ≤ 480px ═══════════════════════════ */
@@ -5373,15 +5595,19 @@ app.index_string = """<!DOCTYPE html>
   }
 
   /* ── Chat panel mobile ── */
-  @media (max-width: 768px) {
-    #chat-panel[style*="display: block"] {
-      width: calc(100vw - 16px) !important;
-      right: 8px !important;
-      bottom: 80px !important;
-      height: 72vh !important;
-      max-height: 520px !important;
+    @media (max-width: 768px) {
+        #chat-panel[style*="display: block"] {
+        width: calc(100vw - 16px) !important;
+        right: 8px !important;
+        bottom: 80px !important;
+        height: 55vh !important;
+        max-height: 420px !important;
+        }
+        #chat-history {
+        height: 220px !important;
+        min-height: 120px !important;
+        }
     }
-  }
 </style>
 </head>
 <body>
@@ -5394,20 +5620,49 @@ app.index_string = """<!DOCTYPE html>
 </body>
 </html>"""
 
+VILLAGE_TAB_CFG = [
+    ("villages",         "Village Selection"),
+    ("village1",         "BETTAHALASURU"),
+    ("village2",         "Village 2"),
+    ("village3",         "Village 3"),
+    ("village4",         "Village 4"),
+]
+
 TAB_CFG = [
-    ("overview",         "⬡  Overview"),
-    ("human",            "👤  Human Pillar"),
-    ("animal",           "🐾  Animal Pillar"),
-    ("environment",      "🌿  Environment Pillar"),
-    ("interconnections", "⟳  Interconnectedness"),
+    ("overview",         "Overview"),
+    ("human",            "Human Pillar"),
+    ("animal",           "Animal Pillar"),
+    ("environment",      "Environment Pillar"),
+    ("interconnections", "Interconnectedness"),
 ]
 
 _INIT_AQI, _INIT_POP = _extract_header_values(DATA)
+
+VILLAGE_TABS_STYLE = {
+    "background": "linear-gradient(90deg, rgba(219,234,254,0.98), rgba(239,246,255,0.98))",
+    "backdropFilter": "blur(16px)",
+    "borderBottom": f"1px solid {BORDER}",
+    "padding": "0 40px",
+    "position": "sticky", "top": "73px", "zIndex": "210",
+    "boxShadow": "0 1px 4px rgba(0,0,0,0.04)",
+    "overflowX": "auto",
+}
+
+SECTION_TABS_STYLE = {
+    "background": "rgba(255,255,255,0.97)",
+    "backdropFilter": "blur(16px)",
+    "borderBottom": f"1px solid {BORDER}",
+    "padding": "0 40px",
+    "position": "sticky", "top": "118px", "zIndex": "200",
+    "boxShadow": "0 1px 4px rgba(0,0,0,0.04)",
+    "overflowX": "auto",
+}
 
 
 app.layout = html.Div([
     dcc.Interval(id="refresh-interval", interval=60 * 1000, n_intervals=0),
     dcc.Store(id="data-timestamp", data=""),
+    dcc.Store(id="selected-village", data=CURRENT_VILLAGE),
     dcc.Store(id="chat-store", data=[]), #CHAT_BOT
 
     html.Header([
@@ -5425,8 +5680,8 @@ app.layout = html.Div([
                     "fontSize": "22px", "fontWeight": "700",
                     "margin": "0", "color": TEXT, "letterSpacing": "-0.3px",
                 }),
-                html.P("BETTAHALASURU · KARNATAKA · PLANETARY HEALTH FOUNDATION",
-                       className="oh-header-sub", style={
+                html.P("BETTAHALASURU - KARNATAKA - PLANETARY HEALTH FOUNDATION",
+                       id="header-village-name", className="oh-header-sub", style={
                     "fontFamily": "'DM Mono',monospace",
                     "fontSize": "10px", "color": MUTED,
                     "letterSpacing": "0.5px", "fontWeight": "600", "margin": "2px 0 0",
@@ -5504,8 +5759,36 @@ app.layout = html.Div([
     
 
     dcc.Tabs(
+        id="village-tabs", value="villages",
+        className="oh-tabs-bar oh-village-tabs-bar",
+        children=[
+            dcc.Tab(
+                label=label, value=val,
+                style={
+                    "padding": "13px 18px", "fontSize": "13px", "fontWeight": "800",
+                    "letterSpacing": "0.5px", "textTransform": "uppercase",
+                    "fontFamily": "'DM Mono',monospace",
+                    "color": "#1e3a8a", "background": "rgba(219,234,254,0.30)",
+                    "borderBottom": "2px solid transparent", "border": "none",
+                    "borderRadius": "0", "whiteSpace": "nowrap",
+                },
+                selected_style={
+                    "padding": "13px 18px", "fontSize": "13px", "fontWeight": "800",
+                    "letterSpacing": "0.5px", "textTransform": "uppercase",
+                    "fontFamily": "'DM Mono',monospace",
+                    "color": "#075985", "background": "rgba(191,219,254,0.55)",
+                    "borderBottom": f"3px solid {C_BLUE}", "border": "none",
+                    "borderRadius": "0", "whiteSpace": "nowrap",
+                },
+            )
+            for val, label in VILLAGE_TAB_CFG
+        ],
+        style=VILLAGE_TABS_STYLE,
+    ),
+
+    dcc.Tabs(
         id="main-tabs", value="overview",
-        className="oh-tabs-bar",
+        className="oh-tabs-bar oh-section-tabs-bar",
         children=[
             dcc.Tab(
                 label=label, value=val,
@@ -5528,15 +5811,7 @@ app.layout = html.Div([
             )
             for val, label in TAB_CFG
         ],
-        style={
-            "background": "rgba(255,255,255,0.97)",
-            "backdropFilter": "blur(16px)",
-            "borderBottom": f"1px solid {BORDER}",
-            "padding": "0 40px",
-            "position": "sticky", "top": "73px", "zIndex": "200",
-            "boxShadow": "0 1px 4px rgba(0,0,0,0.04)",
-            "overflowX": "auto",
-        },
+        style=SECTION_TABS_STYLE,
     ),
 
     html.Div(id="page-content", className="oh-page", style={
@@ -5716,12 +5991,15 @@ app.layout = html.Div([
     Output("last-update-display","children"),
     Output("header-aqi",         "children"),
     Output("header-population",  "children"),
+    Output("header-village-name", "children"),
     Input("refresh-interval",    "n_intervals"),
     Input("manual-refresh-btn",  "n_clicks"),
+    Input("selected-village",     "data"),
 )
-def refresh_data(n_intervals, n_clicks):
-    global DATA
-    DATA = load_all()
+def refresh_data(n_intervals, n_clicks, selected_village):
+    global DATA, CURRENT_VILLAGE
+    CURRENT_VILLAGE = selected_village if selected_village in VILLAGE_CONFIG else "village1"
+    DATA = load_all(CURRENT_VILLAGE)
 
     # Force-refresh the live AQI cache when the user clicks Refresh
     from dash import ctx as dash_ctx
@@ -5733,16 +6011,45 @@ def refresh_data(n_intervals, n_clicks):
     aqi_str, pop_str = _extract_header_values(DATA)
     aqi_content = ["AQI ", html.Span(aqi_str, style={"color": C_AMBER, "fontWeight": "600"})]
     pop_content  = ["Population ", html.Span(pop_str, style={"color": C_BLUE, "fontWeight": "600"})]
-    return ts, f"Updated: {ts}", aqi_content, pop_content
+    village_name = VILLAGE_CONFIG[CURRENT_VILLAGE]["name"]
+    village_header = f"{village_name.upper()} - KARNATAKA - PLANETARY HEALTH FOUNDATION"
+    return ts, f"Updated: {ts}", aqi_content, pop_content, village_header
+
+
+@app.callback(
+    Output("main-tabs", "style"),
+    Input("village-tabs", "value"),
+)
+def toggle_section_tabs(village_tab):
+    style = dict(SECTION_TABS_STYLE)
+    if village_tab == "villages":
+        style["display"] = "none"
+    return style
 
 
 @app.callback(
     Output("page-content", "children"),
+    Input("village-tabs",   "value"),
     Input("main-tabs",      "value"),
     Input("data-timestamp", "data"),
+    Input("selected-village", "data"),
 )
-def render_page(tab, _ts):
-    d = DATA
+def render_page(village_tab, section_tab, _ts, selected_village):
+    global DATA, CURRENT_VILLAGE
+    if village_tab == "villages":
+        return page_village_selection(DATA)
+
+    # Determine the effective village — prefer the tab value over the store
+    effective_village = village_tab if village_tab in VILLAGE_CONFIG else selected_village
+    effective_village = effective_village if effective_village in VILLAGE_CONFIG else "village1"
+
+    # Always load data for the effective village (prevents stale-global race condition)
+    if effective_village != CURRENT_VILLAGE or not DATA:
+        CURRENT_VILLAGE = effective_village
+        DATA = load_all(CURRENT_VILLAGE)
+
+    # Snapshot: use a local reference to DATA in case refresh_data fires concurrently
+    d = DATA if CURRENT_VILLAGE == effective_village else load_all(effective_village)
     pages = {
         "overview":         page_overview,
         "human":            page_human,
@@ -5750,9 +6057,40 @@ def render_page(tab, _ts):
         "environment":      page_environment,
         "interconnections": page_interconnections,
     }
-    return pages.get(tab, page_overview)(d)
+    return pages.get(section_tab, page_overview)(d)
 
 # ══════════════════════════════════════════════════════════════════════════════
+
+@app.callback(
+    Output("selected-village", "data", allow_duplicate=True),
+    Output("main-tabs", "value", allow_duplicate=True),
+    Input("village-tabs", "value"),
+    prevent_initial_call=True,
+)
+def select_village_from_tab(tab):
+    from dash import no_update
+    if tab in VILLAGE_CONFIG:
+        return tab, "overview"
+    return no_update, no_update
+
+
+@app.callback(
+    Output("village-tabs", "value"),
+    Output("main-tabs", "value"),
+    Input("select-village1", "n_clicks"),
+    Input("select-village2", "n_clicks"),
+    Input("select-village3", "n_clicks"),
+    Input("select-village4", "n_clicks"),
+    prevent_initial_call=True,
+)
+def choose_village(v1, v2, v3, v4):
+    from dash import ctx as dash_ctx
+    triggered = dash_ctx.triggered_id or "select-village1"
+    village_key = triggered.replace("select-", "")
+    if village_key not in VILLAGE_CONFIG:
+        village_key = "village1"
+    return village_key, "overview"
+
 # CHATBOT CALLBACKS
 # ══════════════════════════════════════════════════════════════════════════════
 
