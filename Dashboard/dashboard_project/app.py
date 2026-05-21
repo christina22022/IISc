@@ -5563,6 +5563,45 @@ app.index_string = """<!DOCTYPE html>
     .oh-tabs-bar { display: none !important; }
   }
 
+  /* ══ MOBILE VILLAGE NAV STRIP ══════════════════════ */
+  .oh-mobile-village-nav { display: none !important; }
+  @media (max-width: 900px) {
+    .oh-mobile-village-nav {
+      display: flex !important; overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch !important; scrollbar-width: none !important;
+      gap: 8px !important; padding: 8px 14px !important;
+      background: linear-gradient(90deg, rgba(219,234,254,0.98), rgba(239,246,255,0.98)) !important;
+      border-bottom: 1px solid rgba(0,0,0,0.08) !important;
+      position: sticky !important; top: 57px !important; z-index: 220 !important;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.04) !important;
+      flex-wrap: nowrap !important; align-items: center !important;
+    }
+    .oh-mobile-village-nav::-webkit-scrollbar { display: none !important; }
+    .oh-mobile-village-nav-btn {
+      flex-shrink: 0 !important; padding: 6px 14px !important;
+      border-radius: 20px !important; border: 1.5px solid rgba(30,58,138,0.18) !important;
+      background: rgba(219,234,254,0.40) !important; font-family: 'DM Mono', monospace !important;
+      font-size: 10px !important; font-weight: 700 !important;
+      color: #1e3a8a !important; cursor: pointer !important;
+      white-space: nowrap !important; transition: all 0.18s !important;
+      outline: none !important; letter-spacing: 0.4px !important;
+      text-transform: uppercase !important;
+    }
+    .oh-mobile-village-nav-btn-active {
+      background: #1d4ed8 !important; color: #ffffff !important;
+      border-color: #1d4ed8 !important;
+      box-shadow: 0 2px 8px rgba(29,78,216,0.35) !important;
+    }
+    /* Section nav sits below village nav (57px header + ~42px village strip) */
+    /* Village nav sticks just below the header (~57px tall) */
+    .oh-mobile-village-nav { top: 57px !important; }
+    /* Section nav sticks below village nav (57px header + ~40px village strip) */
+    .oh-mobile-nav { top: 97px !important; }
+    /* Hide both desktop tab bars on mobile */
+    .oh-village-tabs-bar { display: none !important; }
+    .oh-section-tabs-bar { display: none !important; }
+  }
+
   /* ══ MOBILE  ≤ 768px ════════════════════════════════ */
   @media (max-width: 768px) {
     .oh-header       { padding: 8px 10px !important; }
@@ -5738,6 +5777,24 @@ app.layout = html.Div([
         "boxShadow": "0 1px 8px rgba(0,0,0,0.06)",
         "fontFamily": "'Sora',sans-serif",
     }),
+
+    html.Div(
+        id="mobile-village-nav-strip",
+        className="oh-mobile-village-nav",
+        children=[
+            html.Button(
+                label,
+                id=f"mob-village-tab-{val}",
+                n_clicks=0,
+                className=(
+                    "oh-mobile-village-nav-btn oh-mobile-village-nav-btn-active"
+                    if val == "villages"
+                    else "oh-mobile-village-nav-btn"
+                ),
+            )
+            for val, label in VILLAGE_TAB_CFG
+        ],
+    ),
 
     html.Div(
         id="mobile-nav-strip",
@@ -6336,20 +6393,21 @@ def update_calibration(drug_filter):
 app.clientside_callback(
     """
     function() {
-        var tabs = ["overview","human","animal","environment","interconnections"];
+        var villages = ["villages","village1","village2","village3","village4"];
         var ctx = window.dash_clientside.callback_context;
         if (!ctx || !ctx.triggered || ctx.triggered.length === 0)
             return window.dash_clientside.no_update;
         var triggered = ctx.triggered[0].prop_id;
-        for (var i = 0; i < tabs.length; i++) {
-            if (triggered === "mob-tab-" + tabs[i] + ".n_clicks") {
-                var at = tabs[i];
+        for (var i = 0; i < villages.length; i++) {
+            if (triggered === "mob-village-tab-" + villages[i] + ".n_clicks") {
+                var at = villages[i];
                 setTimeout(function(a) {
-                    tabs.forEach(function(t) {
-                        var b = document.getElementById("mob-tab-" + t);
+                    villages.forEach(function(v) {
+                        var b = document.getElementById("mob-village-tab-" + v);
                         if (!b) return;
-                        b.className = b.className.replace(/ oh-mobile-nav-btn-active/g,"").trim();
-                        if (t === a) b.className += " oh-mobile-nav-btn-active";
+                        b.className = b.className
+                            .replace(/ oh-mobile-village-nav-btn-active/g,"").trim();
+                        if (v === a) b.className += " oh-mobile-village-nav-btn-active";
                     });
                 }, 20, at);
                 return at;
@@ -6358,9 +6416,9 @@ app.clientside_callback(
         return window.dash_clientside.no_update;
     }
     """,
-    Output("main-tabs", "value", allow_duplicate=True),
-    [Input(f"mob-tab-{val}", "n_clicks") for val, _ in TAB_CFG],
-    State("main-tabs", "value"),
+    Output("village-tabs", "value", allow_duplicate=True),
+    [Input(f"mob-village-tab-{val}", "n_clicks") for val, _ in VILLAGE_TAB_CFG],
+    State("village-tabs", "value"),
     prevent_initial_call=True,
 )
 
