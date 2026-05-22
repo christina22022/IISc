@@ -5535,7 +5535,7 @@ app.index_string = """<!DOCTYPE html>
   .oh-mobile-nav { display: none !important; }
   @media (max-width: 900px) {
     .oh-mobile-nav {
-      display: flex !important; overflow-x: auto !important;
+      display: flex !important;overflow-x: auto !important;
       -webkit-overflow-scrolling: touch !important; scrollbar-width: none !important;
       gap: 8px !important; padding: 10px 14px !important;
       background: rgba(255,255,255,0.97) !important;
@@ -5798,6 +5798,7 @@ app.layout = html.Div([
     html.Div(
         id="mobile-nav-strip",
         className="oh-mobile-nav",
+        style={"display": "none", "visibility": "hidden", "pointerEvents": "none"},
         children=[
             html.Button(
                 label,
@@ -5842,33 +5843,33 @@ app.layout = html.Div([
         style=VILLAGE_TABS_STYLE,
     ),
 
-    dcc.Tabs(
-        id="main-tabs", value="overview",
-        className="oh-tabs-bar oh-section-tabs-bar",
-        children=[
-            dcc.Tab(
-                label=label, value=val,
-                style={
-                    "padding": "12px 16px", "fontSize": "11px", "fontWeight": "600",
-                    "letterSpacing": "0.5px", "textTransform": "uppercase",
-                    "fontFamily": "'DM Mono',monospace",
-                    "color": "#334155", "background": "transparent",
-                    "borderBottom": "2px solid transparent", "border": "none",
-                    "borderRadius": "0", "whiteSpace": "nowrap",
-                },
-                selected_style={
-                    "padding": "12px 16px", "fontSize": "11px", "fontWeight": "600",
-                    "letterSpacing": "0.5px", "textTransform": "uppercase",
-                    "fontFamily": "'DM Mono',monospace",
-                    "color": C_BLUE, "background": "transparent",
-                    "borderBottom": f"2px solid {C_BLUE}", "border": "none",
-                    "borderRadius": "0", "whiteSpace": "nowrap",
-                },
-            )
-            for val, label in TAB_CFG
-        ],
-        style=SECTION_TABS_STYLE,
-    ),
+dcc.Tabs(
+    id="main-tabs", value="overview",
+    className="oh-tabs-bar oh-section-tabs-bar",
+    style={**SECTION_TABS_STYLE, "display": "none"},
+    children=[
+        dcc.Tab(
+            label=label, value=val,
+            style={
+                "padding": "12px 16px", "fontSize": "11px", "fontWeight": "600",
+                "letterSpacing": "0.5px", "textTransform": "uppercase",
+                "fontFamily": "'DM Mono',monospace",
+                "color": "#334155", "background": "transparent",
+                "borderBottom": "2px solid transparent", "border": "none",
+                "borderRadius": "0", "whiteSpace": "nowrap",
+            },
+            selected_style={
+                "padding": "12px 16px", "fontSize": "11px", "fontWeight": "600",
+                "letterSpacing": "0.5px", "textTransform": "uppercase",
+                "fontFamily": "'DM Mono',monospace",
+                "color": C_BLUE, "background": "transparent",
+                "borderBottom": f"2px solid {C_BLUE}", "border": "none",
+                "borderRadius": "0", "whiteSpace": "nowrap",
+            },
+        )
+        for val, label in TAB_CFG
+    ],
+),
 
     html.Div(id="page-content", className="oh-page", style={
         "padding": "36px 40px 60px",
@@ -6074,13 +6075,25 @@ def refresh_data(n_intervals, n_clicks, selected_village):
 
 @app.callback(
     Output("main-tabs", "style"),
+    Output("mobile-nav-strip", "style"),
     Input("village-tabs", "value"),
 )
 def toggle_section_tabs(village_tab):
     style = dict(SECTION_TABS_STYLE)
     if village_tab == "villages":
         style["display"] = "none"
-    return style
+        mobile_style = {
+            "display": "none",
+            "visibility": "hidden",
+            "pointerEvents": "none",
+        }
+    else:
+        mobile_style = {
+            "display": "flex",
+            "visibility": "visible",
+            "pointerEvents": "auto",
+        }
+    return style, mobile_style
 
 
 @app.callback(
@@ -6121,12 +6134,15 @@ def render_page(village_tab, section_tab, _ts, selected_village):
     Output("selected-village", "data", allow_duplicate=True),
     Output("main-tabs", "value", allow_duplicate=True),
     Input("village-tabs", "value"),
+    State("main-tabs", "value"),
     prevent_initial_call=True,
 )
-def select_village_from_tab(tab):
+def select_village_from_tab(tab, current_section):
     from dash import no_update
+    if tab == "villages":
+        return no_update, "overview"
     if tab in VILLAGE_CONFIG:
-        return tab, "overview"
+        return tab, current_section or "overview"
     return no_update, no_update
 
 
@@ -6420,6 +6436,42 @@ app.clientside_callback(
     State("village-tabs", "value"),
     prevent_initial_call=True,
 )
+
+app.clientside_callback(
+    """
+    function() {
+        var sections = ["overview","human","animal","environment","interconnections"];
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx || !ctx.triggered || ctx.triggered.length === 0)
+            return window.dash_clientside.no_update;
+        var strip = document.getElementById("mobile-nav-strip");
+        if (strip && strip.style.display === "none")
+            return window.dash_clientside.no_update;
+        var triggered = ctx.triggered[0].prop_id;
+        for (var i = 0; i < sections.length; i++) {
+            if (triggered === "mob-tab-" + sections[i] + ".n_clicks") {
+                var at = sections[i];
+                setTimeout(function(a) {
+                    sections.forEach(function(s) {
+                        var b = document.getElementById("mob-tab-" + s);
+                        if (!b) return;
+                        b.className = b.className
+                            .replace(/ oh-mobile-nav-btn-active/g, "").trim();
+                        if (s === a) b.className += " oh-mobile-nav-btn-active";
+                    });
+                }, 20, at);
+                return at;
+            }
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("main-tabs", "value", allow_duplicate=True),
+    [Input(f"mob-tab-{val}", "n_clicks") for val, _ in TAB_CFG],
+    State("main-tabs", "value"),
+    prevent_initial_call=True,
+)
+
 
 if __name__ == "__main__":
     app.run(debug=True)
