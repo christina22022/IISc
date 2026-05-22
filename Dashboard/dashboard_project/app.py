@@ -1961,7 +1961,6 @@ def page_overview(d):
     aqi_bands = [
         ("Good",        "#69f0ae",  50,  "#15803d"),
         ("Moderate",    "#ffca28", 100,  "#92400e"),
-        ("Unhlthy Sns", "#ff9800", 150,  "#c2410c"),
         ("Unhealthy",   "#ff7043", 200,  "#b91c1c"),
         ("Very Bad",    "#ab47bc", 300,  "#6b21a8"),
     ]
